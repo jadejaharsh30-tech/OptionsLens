@@ -11,6 +11,7 @@ import { useApp } from '../context/AppContext'
 import useOI from '../hooks/useOI'
 import LoadingSpinner from '../components/LoadingSpinner'
 import ErrorBanner from '../components/ErrorBanner'
+import InfoPanel, { Section, P, Callout, KV } from '../components/InfoPanel'
 
 // ── Formatters ────────────────────────────────────────────────────────────────
 const fmt = n => {
@@ -219,6 +220,65 @@ export default function SmartMoney() {
           </tbody>
         </table>
       </div>
+
+      <InfoPanel title="Understanding Open Interest, OI Change & PCR">
+        <Section title="What is Open Interest?">
+          <P>Open Interest (OI) is the total number of outstanding (unsettled) options contracts at a given strike. Unlike volume, which counts every trade in a session, OI only increases when a new contract is created (a buyer and seller open a fresh position) and decreases when a contract is closed or exercised. OI represents real, committed money — it's the market's structural positioning, not just intraday activity.</P>
+          <Callout type="signal">The strikes with the highest OI are the most important levels on the chart. Large call OI above the spot price acts as resistance — the writers of those calls will hedge by selling the underlying if the market rises toward their strike. Large put OI below spot acts as support for the same reason. This is why markets often stall or reverse near high-OI strikes, especially approaching expiry.</Callout>
+        </Section>
+
+        <Section title="Reading the OI Butterfly Chart">
+          <P>Green bars are Call OI, red bars are Put OI. The tallest bars mark the strikes where the most contracts are outstanding. Look for:</P>
+          <P><strong>OI concentration zone:</strong> The cluster of strikes where both calls and puts have high OI. The market tends to stay within this zone approaching expiry because of the gravitational pull of max pain.</P>
+          <P><strong>Asymmetric OI:</strong> If put OI is dramatically higher than call OI across most strikes, institutions are heavily hedged for downside. This is the normal state. If call OI is unusually high, it signals either large speculative long positioning or corporate hedging of equity portfolios.</P>
+          <P><strong>Isolated spike at one strike:</strong> A single strike with dramatically higher OI than its neighbours is a significant level. Institutions have concentrated their positioning there — it acts as a strong magnet for the underlying price near expiry.</P>
+        </Section>
+
+        <Section title="Reading the OI Change Chart">
+          <P>OI Change shows the delta in OI from the previous day's settlement. This is more actionable than absolute OI because it tells you what is happening <em>today</em>, not what accumulated over weeks.</P>
+          <KV label="Green bar (positive OI change)" value="New contracts being created — fresh positioning entering the market. Combined with price direction tells you who is entering (see the four buildup types in Alert Engine)." />
+          <KV label="Red bar (negative OI change)" value="Contracts being closed — existing positions being unwound. Could be profit-taking, stop-losses, or expiry-driven unwinding." />
+          <Callout type="warning">Large OI buildup at an OTM strike suddenly is the most actionable signal. When institutions add large fresh OI at a specific strike that wasn't there yesterday, they're positioning for that level to be tested. This is what the Alert Engine is detecting and quantifying.</Callout>
+        </Section>
+
+        <Section title="PCR — Put-Call Ratio">
+          <P>PCR = Total Put OI ÷ Total Call OI. It measures the aggregate directional bias of all positioning.</P>
+          <KV label="PCR > 1.2 (teal)" value="More puts than calls outstanding. Heavy put positioning. Contrarian signal — if everyone is hedged for downside, the market may actually have limited downside because institutions are already protected. Markets often rally from extreme bearish PCR." />
+          <KV label="PCR 0.8–1.2 (amber)" value="Balanced positioning. No strong directional signal from PCR alone." />
+          <KV label="PCR < 0.8 (red)" value="More calls than puts. Heavy call positioning or lack of put hedging. Contrarian signal — excessive bullish positioning can mean the market is already fully long and vulnerable to a reversal on any negative news." />
+          <Callout type="info">PCR is a contrarian indicator in extreme readings. The crowd being heavily positioned one way often precedes a move the other way, because everyone who wanted to be on that side is already in — there's no one left to push the market further.</Callout>
+        </Section>
+
+        <Section title="Max Pain">
+          <P>Max Pain is the strike price at which the total payout to all option holders (both calls and puts) is minimised — or equivalently, where option writers (who are typically well-capitalised institutions) lose the least money at expiry. The calculation: for each possible strike as settlement price, compute what all outstanding calls and puts would pay out, and find the strike that minimises total payout.</P>
+          <Callout type="signal">Markets have a documented tendency to gravitate toward Max Pain as expiry approaches, particularly in the final week. This is because option writers hedge dynamically, and their collective hedging activity nudges the underlying toward the level where they are most profitable. It's not manipulation — it's the natural outcome of delta hedging at scale.</Callout>
+          <P>Use Max Pain as a gravitational reference. If spot is far above Max Pain and you're near expiry, there's structural pressure pulling it down. If spot is far below, there's upward pull. The closer you get to expiry, the stronger this effect becomes.</P>
+        </Section>
+      </InfoPanel>
+
+      <InfoPanel title="Understanding Gamma Exposure (GEX)">
+        <Section title="What is GEX?">
+          <P>Gamma Exposure measures the total dollar amount of gamma that market makers (dealers) are carrying as a result of the options they've sold. Dealers are assumed to be the counterparty to most institutional and retail options flow — they're typically net short options.</P>
+          <P>When dealers are short options, they must delta-hedge to stay directionally neutral. They do this by buying or selling the underlying continuously. The rate at which they need to adjust their hedge as the underlying moves is their gamma exposure. The formula: <strong>GEX = Gamma × OI × Lot Size × Spot² × 0.01</strong></P>
+        </Section>
+
+        <Section title="Positive vs Negative GEX — The Most Important Distinction">
+          <Callout type="signal">Positive GEX (green bars, above the amber line): Dealers are net long gamma at this strike. When spot rises toward this strike, dealers SELL to re-hedge (they bought the underlying earlier at a lower delta). When spot falls, they BUY. This creates a self-stabilising, mean-reverting force. Markets pin near high positive GEX strikes — especially toward expiry when gamma is highest. This is why you see Nifty "stuck" near a round number for days near expiry.</Callout>
+          <Callout type="warning">Negative GEX (red bars, below the amber line): Dealers are net short gamma here. When spot rises, they must BUY more (chasing the move to re-hedge). When spot falls, they must SELL (accelerating the fall). Negative GEX amplifies moves — the market trends faster and farther in negative GEX zones. This is where breakouts extend rather than reverse.</Callout>
+        </Section>
+
+        <Section title="The Zero-GEX Level (Amber Reference Line)">
+          <P>The most important level on the GEX chart. The strike where Net GEX crosses from positive to negative is called the "Gamma Flip" point. Above this level (positive GEX territory), the market is dealer-stabilised. Below it (negative GEX territory), the market is dealer-destabilised.</P>
+          <Callout type="warning">When spot crosses below the Gamma Flip level, the market regime changes. Mean-reversion gives way to trending. Breakdowns accelerate. Vol expands. This is often when "a normal pullback becomes a real correction" — the mechanical hedging flows change character entirely. Watch for when spot breaks the Gamma Flip on high volume.</Callout>
+        </Section>
+
+        <Section title="Implementing GEX in Decision-Making">
+          <P><strong>Identifying pinning levels:</strong> The strike with the highest positive GEX is the magnetic center for the current expiry. As expiry approaches and gamma grows, the pin strengthens. Use this to identify where short-dated options straddles might be hopeless — the market may not go anywhere.</P>
+          <P><strong>Trading breakouts:</strong> Before entering a breakout trade, check whether you're in positive or negative GEX territory. A breakout attempt from positive GEX is likely to fail and revert. The same breakout from negative GEX territory is more likely to extend — dealers will be forced to chase the move with you.</P>
+          <P><strong>Volatility regime awareness:</strong> If aggregate GEX is deeply negative across all strikes (the entire market is in a short-gamma regime), expect higher intraday volatility, wider swings, and trend days. If aggregate GEX is strongly positive, expect lower volatility, tighter ranges, and mean-reversion.</P>
+          <Callout type="info">A practical rule: in positive GEX, prefer selling options (theta strategies benefit from the pinning and low vol). In negative GEX, prefer buying options or trading momentum (the mechanical amplification works in your favour).</Callout>
+        </Section>
+      </InfoPanel>
 
     </div>
   )

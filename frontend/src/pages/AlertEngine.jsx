@@ -10,25 +10,26 @@ import { useApp } from '../context/AppContext'
 import client from '../api/client'
 import ErrorBanner from '../components/ErrorBanner'
 import LoadingSpinner from '../components/LoadingSpinner'
+import InfoPanel, { Section, P, Callout, KV } from '../components/InfoPanel'
 
-const ALL_SYMBOLS = ['NIFTY','BANKNIFTY','RELIANCE','TCS','HDFCBANK','INFY','ICICIBANK']
+const ALL_SYMBOLS = ['NIFTY', 'BANKNIFTY', 'RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'ICICIBANK']
 
 const fmt = n => {
   if (n == null) return '—'
   const abs = Math.abs(n)
-  if (abs >= 1e6) return `${(n/1e6).toFixed(1)}M`
-  if (abs >= 1e3) return `${(n/1e3).toFixed(0)}K`
+  if (abs >= 1e6) return `${(n / 1e6).toFixed(1)}M`
+  if (abs >= 1e3) return `${(n / 1e3).toFixed(0)}K`
   return String(n)
 }
 
 // ── Status indicator ──────────────────────────────────────────────────────────
 function StatusDot({ status }) {
   const map = {
-    ok:            { color: '#0D9488', label: 'Live' },
+    ok: { color: '#0D9488', label: 'Live' },
     market_closed: { color: '#D97706', label: 'Market Closed' },
-    error:         { color: '#DC2626', label: 'Error' },
-    starting:      { color: '#C8860A', label: 'Starting…' },
-    idle:          { color: '#A89585', label: 'Idle' },
+    error: { color: '#DC2626', label: 'Error' },
+    starting: { color: '#C8860A', label: 'Starting…' },
+    idle: { color: '#A89585', label: 'Idle' },
   }
   const { color, label } = map[status] || map.idle
   return (
@@ -46,13 +47,13 @@ function StatusDot({ status }) {
 // ── Confidence badge ──────────────────────────────────────────────────────────
 function ConfidenceBadge({ level }) {
   const styles = {
-    HIGH:   { background: '#0D9488', color: '#fff' },
+    HIGH: { background: '#0D9488', color: '#fff' },
     MEDIUM: { background: '#D97706', color: '#fff' },
-    LOW:    { background: '#A89585', color: '#fff' },
+    LOW: { background: '#A89585', color: '#fff' },
   }
   return (
     <span className="mono text-xs px-1.5 py-0.5 rounded"
-          style={styles[level] || styles.LOW}>
+      style={styles[level] || styles.LOW}>
       {level}
     </span>
   )
@@ -65,20 +66,21 @@ export default function AlertEngine() {
   const { tokenValid } = useApp()
 
   // ── Config (control panel) ────────────────────────────────────────────────
-  const [selectedSymbols, setSelectedSymbols] = useState(['NIFTY','BANKNIFTY'])
-  const [pollInterval,    setPollInterval]    = useState(10)
-  const [spikeThreshold,  setSpikeThreshold]  = useState(500)
-  const [speedWindow,     setSpeedWindow]     = useState(5)
-  const [confirmPolls,    setConfirmPolls]    = useState(4)
-  const [minVolume,       setMinVolume]       = useState(100)
-  const [strikesEither,   setStrikesEither]   = useState(1)
+  const [selectedSymbols, setSelectedSymbols] = useState(['NIFTY', 'BANKNIFTY'])
+  const [pollInterval, setPollInterval] = useState(10)
+  const [spikeThreshold, setSpikeThreshold] = useState(500)
+  const [speedWindow, setSpeedWindow] = useState(5)
+  const [confirmPolls, setConfirmPolls] = useState(4)
+  const [minVolume, setMinVolume] = useState(100)
+  const [strikesEither, setStrikesEither] = useState(1)
 
   // ── Runtime state ─────────────────────────────────────────────────────────
-  const [status,   setStatus]   = useState(null)
-  const [alerts,   setAlerts]   = useState([])
+  const [status, setStatus] = useState(null)
+  const [alerts, setAlerts] = useState([])
   const [snapshot, setSnapshot] = useState({})
   const [startErr, setStartErr] = useState(null)
   const [starting, setStarting] = useState(false)
+  const [showThresholdsInfo, setShowThresholdsInfo] = useState(false)
 
   // ── Poll all three endpoints every 5s ─────────────────────────────────────
   const pollAll = useCallback(async () => {
@@ -109,13 +111,13 @@ export default function AlertEngine() {
     setStarting(true); setStartErr(null)
     try {
       await client.post('/api/alert-engine/start', {
-        symbols:                selectedSymbols,
-        poll_interval_sec:      pollInterval,
+        symbols: selectedSymbols,
+        poll_interval_sec: pollInterval,
         oi_spike_threshold_pct: spikeThreshold,
-        oi_speed_window_min:    speedWindow,
-        premium_confirm_polls:  confirmPolls,
-        min_volume_filter:      minVolume,
-        strikes_either_side:    strikesEither,
+        oi_speed_window_min: speedWindow,
+        premium_confirm_polls: confirmPolls,
+        min_volume_filter: minVolume,
+        strikes_either_side: strikesEither,
       })
       await pollAll()
     } catch (e) {
@@ -139,12 +141,12 @@ export default function AlertEngine() {
     } catch { /* silent */ }
   }
 
-  const isRunning       = status?.running === true
-  const totalPending    = Object.values(status?.pending_spikes || {})
-                            .reduce((s, arr) => s + arr.length, 0)
-  const inputStyle      = { background: '#FBF7F0', border: '1px solid #E8DDD0', color: '#2C1810' }
-  const focusGold       = e => { e.target.style.borderColor = '#C8860A' }
-  const blurSand        = e => { e.target.style.borderColor = '#E8DDD0' }
+  const isRunning = status?.running === true
+  const totalPending = Object.values(status?.pending_spikes || {})
+    .reduce((s, arr) => s + arr.length, 0)
+  const inputStyle = { background: '#FBF7F0', border: '1px solid #E8DDD0', color: '#2C1810' }
+  const focusGold = e => { e.target.style.borderColor = '#C8860A' }
+  const blurSand = e => { e.target.style.borderColor = '#E8DDD0' }
 
   return (
     <div className="flex flex-col gap-5 fade-up">
@@ -177,7 +179,7 @@ export default function AlertEngine() {
             <div className="mono text-sm" style={{ color: '#2C1810' }}>
               {status.last_poll_at
                 ? new Date(status.last_poll_at).toLocaleTimeString('en-IN',
-                    { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                  { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit' })
                 : '—'}
             </div>
           </div>
@@ -212,10 +214,10 @@ export default function AlertEngine() {
           >
             {starting
               ? <span className="flex items-center gap-2">
-                  <span className="w-4 h-4 rounded-full border-2 inline-block animate-spin"
-                        style={{ borderColor: 'rgba(251,247,240,0.3)', borderTopColor: '#FBF7F0' }} />
-                  Starting…
-                </span>
+                <span className="w-4 h-4 rounded-full border-2 inline-block animate-spin"
+                  style={{ borderColor: 'rgba(251,247,240,0.3)', borderTopColor: '#FBF7F0' }} />
+                Starting…
+              </span>
               : '▶ Start Engine'}
           </button>
         ) : (
@@ -267,20 +269,56 @@ export default function AlertEngine() {
 
           {/* Threshold sliders */}
           <div className="card">
-            <h3 className="mb-4" style={SL}>Engine Thresholds</h3>
+            <h3 className="mb-4 flex items-center gap-2" style={SL}>
+              Engine Thresholds
+              <button
+                onClick={() => setShowThresholdsInfo(true)}
+                className="mono text-xs flex items-center justify-center transition-all"
+                title="What do these thresholds mean?"
+                style={{
+                  width: 16, height: 16, borderRadius: '50%',
+                  background: 'rgba(200,134,10,0.15)',
+                  border: '1px solid rgba(200,134,10,0.35)',
+                  color: '#C8860A', fontWeight: 700, fontSize: 10,
+                  outline: 'none',
+                }}
+                onMouseEnter={e => {
+                  e.target.style.background = 'rgba(200,134,10,0.25)'
+                  e.target.style.color = '#B45309'
+                }}
+                onMouseLeave={e => {
+                  e.target.style.background = 'rgba(200,134,10,0.15)'
+                  e.target.style.color = '#C8860A'
+                }}
+              >
+                ?
+              </button>
+            </h3>
             {[
-              { label: 'OI Spike Threshold', value: spikeThreshold, min: 50,  max: 2000, step: 50,  unit: '%',   setter: setSpikeThreshold,
-                hint: 'OI % from session open to trigger Stage 1' },
-              { label: 'Speed Window',        value: speedWindow,    min: 1,   max: 15,   step: 1,   unit: 'min', setter: setSpeedWindow,
-                hint: 'Rolling window for OI velocity' },
-              { label: 'Confirm Polls',       value: confirmPolls,   min: 1,   max: 10,   step: 1,   unit: '',    setter: setConfirmPolls,
-                hint: 'Polls to wait for premium confirmation' },
-              { label: 'Min Volume',          value: minVolume,      min: 10,  max: 5000, step: 10,  unit: '',    setter: setMinVolume,
-                hint: 'Minimum volume for a strike to be monitored' },
-              { label: 'Strikes Either Side', value: strikesEither,  min: 1,   max: 5,    step: 1,   unit: '',    setter: setStrikesEither,
-                hint: 'ATM ± n strikes to watch' },
-              { label: 'Poll Interval',       value: pollInterval,   min: 3,   max: 30,   step: 1,   unit: 's',   setter: setPollInterval,
-                hint: 'Fyers API call cadence' },
+              {
+                label: 'OI Spike Threshold', value: spikeThreshold, min: 50, max: 2000, step: 50, unit: '%', setter: setSpikeThreshold,
+                hint: 'OI % from session open to trigger Stage 1'
+              },
+              {
+                label: 'Speed Window', value: speedWindow, min: 1, max: 15, step: 1, unit: 'min', setter: setSpeedWindow,
+                hint: 'Rolling window for OI velocity'
+              },
+              {
+                label: 'Confirm Polls', value: confirmPolls, min: 1, max: 10, step: 1, unit: '', setter: setConfirmPolls,
+                hint: 'Polls to wait for premium confirmation'
+              },
+              {
+                label: 'Min Volume', value: minVolume, min: 10, max: 5000, step: 10, unit: '', setter: setMinVolume,
+                hint: 'Minimum volume for a strike to be monitored'
+              },
+              {
+                label: 'Strikes Either Side', value: strikesEither, min: 1, max: 5, step: 1, unit: '', setter: setStrikesEither,
+                hint: 'ATM ± n strikes to watch'
+              },
+              {
+                label: 'Poll Interval', value: pollInterval, min: 3, max: 30, step: 1, unit: 's', setter: setPollInterval,
+                hint: 'Fyers API call cadence'
+              },
             ].map(s => (
               <div key={s.label} className="mb-3 last:mb-0">
                 <div className="flex justify-between text-xs mono mb-1">
@@ -303,7 +341,7 @@ export default function AlertEngine() {
       {/* ── 3. Pending confirmation spikes ────────────────────────────────── */}
       {isRunning && totalPending > 0 && (
         <div className="card"
-             style={{ borderColor: 'rgba(217,119,6,0.3)', background: 'rgba(217,119,6,0.03)' }}>
+          style={{ borderColor: 'rgba(217,119,6,0.3)', background: 'rgba(217,119,6,0.03)' }}>
           <h3 className="mb-3" style={{ ...SL, color: '#B45309' }}>
             ⏳ Awaiting Premium Confirmation
             <span className="mono text-xs font-normal ml-2" style={{ color: '#A89585' }}>
@@ -314,7 +352,7 @@ export default function AlertEngine() {
             {Object.entries(status.pending_spikes).flatMap(([sym, spikes]) =>
               spikes.map((sp, i) => (
                 <div key={`${sym}-${i}`} className="card py-2 px-3"
-                     style={{ background: 'rgba(217,119,6,0.06)', borderColor: 'rgba(217,119,6,0.20)' }}>
+                  style={{ background: 'rgba(217,119,6,0.06)', borderColor: 'rgba(217,119,6,0.20)' }}>
                   <div className="mono text-xs font-semibold" style={{ color: '#B45309' }}>
                     {sym} · {sp.strike} {sp.option_type}
                   </div>
@@ -353,9 +391,9 @@ export default function AlertEngine() {
               <table className="w-full text-xs mono">
                 <thead>
                   <tr style={{ borderBottom: '1px solid #E8DDD0' }}>
-                    {['Strike','Type','OI','OI Δ vs Prev','OI% vs Settle','LTP','Volume','ATM?'].map(h => (
+                    {['Strike', 'Type', 'OI', 'OI Δ vs Prev', 'OI% vs Settle', 'LTP', 'Volume', 'ATM?'].map(h => (
                       <th key={h} className="text-left pb-2 pr-5 font-medium"
-                          style={{ color: '#A89585' }}>{h}</th>
+                        style={{ color: '#A89585' }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
@@ -371,23 +409,23 @@ export default function AlertEngine() {
                         r.strike === snap.atm_strikes[Math.floor(snap.atm_strikes.length / 2)]
                       return (
                         <tr key={i}
-                            style={{
-                              borderBottom: '1px solid rgba(232,221,208,0.5)',
-                              background: atmHighlight ? 'rgba(200,134,10,0.04)' : 'transparent',
-                            }}>
+                          style={{
+                            borderBottom: '1px solid rgba(232,221,208,0.5)',
+                            background: atmHighlight ? 'rgba(200,134,10,0.04)' : 'transparent',
+                          }}>
                           <td className="py-1.5 pr-5 font-semibold"
-                              style={{ color: atmHighlight ? '#C8860A' : '#2C1810' }}>
+                            style={{ color: atmHighlight ? '#C8860A' : '#2C1810' }}>
                             {r.strike}
                           </td>
                           <td className="py-1.5 pr-5 font-medium"
-                              style={{ color: r.option_type === 'CE' ? '#0D9488' : '#DC2626' }}>
+                            style={{ color: r.option_type === 'CE' ? '#0D9488' : '#DC2626' }}>
                             {r.option_type}
                           </td>
                           <td className="py-1.5 pr-5" style={{ color: '#2C1810' }}>
                             {fmt(r.oi)}
                           </td>
                           <td className="py-1.5 pr-5"
-                              style={{ color: (r.oi_change ?? 0) >= 0 ? '#0D9488' : '#DC2626' }}>
+                            style={{ color: (r.oi_change ?? 0) >= 0 ? '#0D9488' : '#DC2626' }}>
                             {(r.oi_change ?? 0) >= 0 ? '+' : ''}{fmt(r.oi_change)}
                           </td>
                           <td className="py-1.5 pr-5" style={{ color: '#7A6355' }}>
@@ -420,7 +458,7 @@ export default function AlertEngine() {
           Alert Log — Today
           {alerts.length > 0 && (
             <span className="mono text-xs px-2 py-0.5 rounded font-normal"
-                  style={{ background: 'rgba(200,134,10,0.12)', color: '#C8860A' }}>
+              style={{ background: 'rgba(200,134,10,0.12)', color: '#C8860A' }}>
               {alerts.length} confirmed signal{alerts.length !== 1 ? 's' : ''}
             </span>
           )}
@@ -436,9 +474,9 @@ export default function AlertEngine() {
           <table className="w-full text-xs mono">
             <thead>
               <tr style={{ borderBottom: '1px solid #E8DDD0' }}>
-                {['Time','Symbol','Strike','Type','Signal','Trade','OI Δ%','Speed','Confidence',''].map(h => (
+                {['Time', 'Symbol', 'Strike', 'Type', 'Signal', 'Trade', 'OI Δ%', 'Speed', 'Confidence', ''].map(h => (
                   <th key={h} className="text-left pb-2 pr-4 font-medium"
-                      style={{ color: '#A89585' }}>{h}</th>
+                    style={{ color: '#A89585' }}>{h}</th>
                 ))}
               </tr>
             </thead>
@@ -448,9 +486,9 @@ export default function AlertEngine() {
                 const signalColor = isBullish ? '#0D9488' : '#DC2626'
                 return (
                   <tr key={a.id ?? i}
-                      style={{ borderBottom: '1px solid rgba(232,221,208,0.5)' }}
-                      onMouseEnter={e => e.currentTarget.style.background = 'rgba(200,134,10,0.03)'}
-                      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                    style={{ borderBottom: '1px solid rgba(232,221,208,0.5)' }}
+                    onMouseEnter={e => e.currentTarget.style.background = 'rgba(200,134,10,0.03)'}
+                    onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
                     <td className="py-2 pr-4" style={{ color: '#7A6355' }}>
                       {a.triggered_at?.slice(11, 19)}
                     </td>
@@ -461,7 +499,7 @@ export default function AlertEngine() {
                       {a.strike}
                     </td>
                     <td className="py-2 pr-4 font-medium"
-                        style={{ color: a.option_type === 'CE' ? '#0D9488' : '#DC2626' }}>
+                      style={{ color: a.option_type === 'CE' ? '#0D9488' : '#DC2626' }}>
                       {a.option_type}
                     </td>
                     <td className="py-2 pr-4 font-semibold" style={{ color: signalColor }}>
@@ -504,6 +542,133 @@ export default function AlertEngine() {
         )}
       </div>
 
+      <InfoPanel title="Understanding the Alert Engine — Thresholds, Workflow & Signal Interpretation">
+        <Section title="The Two-Stage Detection Workflow">
+          <P>The engine follows a strict two-stage process to ensure only high-quality, confirmed signals generate alerts. A single threshold breach is not enough — the market must confirm the direction before an alert fires.</P>
+          <Callout type="signal">Stage 1 — Spike Detection: The engine monitors the OI % change vs yesterday's closing OI (called oichp — Fyers calculates this directly as ((today OI − yesterday OI) ÷ yesterday OI) × 100). When this exceeds the OI Spike Threshold at any ATM ± n strike, Stage 1 fires. The strike enters the "Awaiting Confirmation" window. Crucially, this metric is start-time independent — it doesn't matter when you launched the app, the reference point is always yesterday's settlement.</Callout>
+          <Callout type="warning">Stage 2 — Premium Confirmation: Over the next N polls (Confirm Polls setting), the engine watches two things simultaneously: (1) Is the option's premium (LTP) dropping while OI is still growing from the spike point? If yes → SHORT_BUILDUP confirmed. (2) Is OI still increasing above the spike-point OI (not session open, not settlement — the exact moment Stage 1 fired)? This spike-point reference is critical. If writers covered immediately after the spike, OI falls below spike-point and the signal is suppressed as LONG_UNWINDING, preventing false alerts.</Callout>
+          <P>Only after Stage 2 confirmation does an alert appear in the Alert Log. Strikes that fail confirmation are suppressed and written to the database with a reason (PREMIUM_NOT_CONFIRMED or DUAL_SIDE_WRITING) — they never appear in your active log.</P>
+        </Section>
+
+        <Section title="Why Option Premium, Not Underlying Price?">
+          <P>This is a common point of confusion. The Ravi Bhatt framework uses option LTP (the price of the option contract itself) — not the price of Nifty or the underlying stock. Here's why this is correct for options-specific OI analysis:</P>
+          <P>When an institution writes (sells) a PUT option: OI goes up (new contract created) AND the PUT option's LTP goes down (supply of puts just increased — more sellers means lower premium). The underlying may not move at all yet. So at the moment of detection, option premium is the leading indicator of who is entering the market — the underlying only moves later when many writers pile in and create net selling pressure.</P>
+          <KV label="OI ↑ + Option LTP ↓" value="SHORT_BUILDUP — writers (sellers) entering. Supply of options increasing, pushing premium down." />
+          <KV label="OI ↑ + Option LTP ↑" value="LONG_BUILDUP — buyers entering. Demand pulling premium up." />
+          <KV label="OI ↓ + Option LTP ↑" value="SHORT_COVERING — earlier writers buying back to close. Demand for covering pushes premium up." />
+          <KV label="OI ↓ + Option LTP ↓" value="LONG_UNWINDING — earlier buyers selling to exit. Supply of closing longs pushes premium down." />
+          <Callout type="info">The signal then maps to underlying direction: PUT SHORT_BUILDUP means institutions are writing puts (they believe the underlying WON'T fall) → BULLISH signal on the underlying → BUY CALL. CALL SHORT_BUILDUP means institutions are writing calls (they believe the underlying WON'T rise) → BEARISH signal → BUY PUT. The option premium direction reveals intent; the underlying direction is the implication.</Callout>
+        </Section>
+
+        <Section title="The 6 Thresholds — What Each Controls">
+          <KV label="OI Spike Threshold (default 500%)" value="Stage 1 trigger. The engine fires only when a strike's OI has grown by this % vs yesterday's close. At 500%, you need a 6× increase in OI (from 100 to 600 contracts) to trigger. Lower for more sensitivity (more signals, more noise). Raise for expiry week when base OI is already high and normal fluctuations can hit 300-400% without meaning much." />
+          <KV label="Speed Window (default 5 min)" value="Rolling window for OI velocity (% per minute). A fast Speed with low threshold = very sensitive to sudden bursts. A wide window smooths out velocity and catches sustained institutional accumulation over 10-15 minutes rather than single-tick anomalies." />
+          <KV label="Confirm Polls (default 4)" value="How many 10-second polls the engine waits for premium to confirm the direction. At 4 polls × 10s = 40 seconds confirmation window. Reduce for faster alerts (higher false positive risk). Raise for higher-quality signals (risk of missing fast moves). 3-5 is the practical range." />
+          <KV label="Min Volume (default 100)" value="Liquidity gate. Strikes below this volume AND with zero OI are ignored entirely. Prevents the engine from triggering on illiquid far-OTM strikes where a single small trade could generate an artificial 10,000% OI spike. Raise to 500+ for single-stock options which are thinner." />
+          <KV label="Strikes Either Side (default 1)" value="ATM ± n strikes monitored. At 1, the engine watches 3 strikes (ATM-1, ATM, ATM+1). Raise to 2 in trending markets where institutional positioning sits 1-2 strikes away from spot in the trend direction. Keep at 1 for clean, focused signals in ranging/choppy markets." />
+          <KV label="Poll Interval (default 10s)" value="Fyers API call cadence. Lower = more real-time, higher API load. Raise to 15-20s if you're hitting Fyers rate limits or experiencing connection issues. A full Stage 1 → Stage 2 cycle at default settings takes ~50 seconds (10s × (1 spike poll + 4 confirm polls))." />
+        </Section>
+
+        <Section title="Reading the Alert Log">
+          <P><strong>Signal Direction (▲ BULLISH / ▼ BEARISH):</strong> The engine's conclusion about the underlying's direction based on which side (CE or PE) had the SHORT_BUILDUP. BULLISH means PUT writers are entering — they're selling puts = they expect no downside. BEARISH means CALL writers are entering — they're selling calls = they expect no upside.</P>
+          <P><strong>Trade:</strong> The suggested trade entry — the opposite side from where the writing occurred. If 23500 PE SHORT_BUILDUP → BUY 23500 CE. This is the most direct translation of the signal: if institutions are confidently writing puts at 23500, buy calls at the same strike to participate in the expected upside.</P>
+          <P><strong>OI Δ%:</strong> The oichp value that triggered Stage 1 — how much OI grew vs yesterday's settlement at this strike. Higher = stronger conviction in the positioning.</P>
+          <P><strong>Speed:</strong> OI velocity in %/min at the time of Stage 1 detection. High speed (50%+/min) = aggressive, fast institutional entry. Low speed (5-10%/min) = gradual accumulation, less urgency.</P>
+          <Callout type="warning">Confidence badge interpretation: HIGH (3+ points) means strong OI spike + fast speed + high volume — all three confirming factors aligned. MEDIUM means 1-2 confirming factors. LOW means the signal met the minimum threshold but lacks breadth of confirmation. Weight HIGH signals more heavily, but don't ignore MEDIUM signals when other context (GEX, skew, market structure) aligns.</Callout>
+        </Section>
+
+        <Section title="Suppression Filters — Why Signals Disappear">
+          <P>Not every Stage 1 spike becomes a confirmed alert. Two automatic suppression filters prevent low-quality signals:</P>
+          <KV label="PREMIUM_NOT_CONFIRMED" value="OI spiked but premium didn't drop within the confirmation window. The OI spike may have been batch-reporting from exchange rather than real-time institutional entry, OR the market moved against the writers before they could establish their position. Either way, the directional signal was not clean." />
+          <KV label="DUAL_SIDE_WRITING" value="Both the CE and PE at the same strike had oichp ≥ 200% simultaneously. This is event hedging — institutions are buying a straddle/strangle, not taking a directional bet. Both sides writing aggressively = they expect a big move but don't know which direction. Not actionable for directional trading." />
+        </Section>
+      </InfoPanel>
+
+      {/* ── Standalone Modal for Engine Thresholds ─────────────────────────── */}
+      {showThresholdsInfo && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 fade-up"
+          style={{ background: 'rgba(44, 24, 16, 0.6)', backdropFilter: 'blur(3px)' }}
+          onClick={() => setShowThresholdsInfo(false)}
+        >
+          <div
+            className="card relative overflow-y-auto"
+            style={{
+              width: '90%', maxWidth: 640, maxHeight: '85vh',
+              background: '#FBF7F0',
+              border: '1px solid #E8DDD0',
+              boxShadow: '0 20px 40px rgba(44, 24, 16, 0.25)',
+              padding: 0,
+            }}
+            onClick={e => e.stopPropagation()} // Prevent clicking inside modal from closing it
+          >
+            {/* Modal Header */}
+            <div
+              className="px-6 py-4 flex items-center justify-between"
+              style={{ borderBottom: '1px solid #E8DDD0', background: 'rgba(251,247,240,0.95)', position: 'sticky', top: 0, zIndex: 10 }}
+            >
+              <h2 className="font-display font-semibold" style={{ color: '#2C1810', fontSize: 16 }}>
+                Understanding the 6 Engine Thresholds
+              </h2>
+              <button
+                onClick={() => setShowThresholdsInfo(false)}
+                className="text-xl leading-none"
+                style={{ color: '#A89585', outline: 'none' }}
+                onMouseEnter={e => e.target.style.color = '#DC2626'}
+                onMouseLeave={e => e.target.style.color = '#A89585'}
+              >
+                &times;
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="px-6 py-5">
+              <P>
+                The Alert Engine detects institutional option writing by analyzing Open Interest (OI) spikes and correlating them with premium price action.
+                These thresholds govern the sensitivity of the two-stage detection logic.
+              </P>
+
+              <div className="mt-6 mb-2">
+                <KV label="OI Spike Threshold" value="Stage 1 trigger. The engine fires only when a strike's OI has grown by this % vs yesterday's closing settlement. At 500%, you need a 6× increase in OI to trigger. Lower for more sensitivity (more signals, more noise). Raise heavily for expiry week." />
+              </div>
+              <div className="mb-2">
+                <KV label="Speed Window" value="Rolling mathematical window (in minutes) for calculating OI velocity. A 5-minute window smooths out tick-level noise and identifies sustained institutional accumulation. A shorter window reacts to violent, instantaneous betting bursts." />
+              </div>
+              <div className="mb-2">
+                <KV label="Confirm Polls" value="The time duration the engine spends in Stage 2 (Awaiting Premium Confirmation). E.g., 4 polls × 10s = 40 seconds. The engine demands proof that the option's LTP is dropping WHILE OI is rising before firing the alert." />
+              </div>
+              <div className="mb-2">
+                <KV label="Min Volume" value="A hard liquidity gate. If a strike has zero initial OI and low volume, a single retail order of 10 lots could trigger a 10,000% spike. This filter drops those illiquid statistical anomalies before they hit Stage 1." />
+              </div>
+              <div className="mb-2">
+                <KV label="Strikes Either Side" value="The surveillance net around the current Spot price. Set to 1, the engine tracks the exact ATM strike + 1 ITM + 1 OTM. In violently trending markets, increasing this ensures you don't miss buildup happening slightly away from Spot." />
+              </div>
+              <div className="mb-2">
+                <KV label="Poll Interval" value="Fyers API call cadence. Governs how frequently the backend polls fresh snapshots. Faster polling allows quicker reaction times but risks hitting broker API rate limits." />
+              </div>
+
+              <div className="mt-6">
+                <Callout type="warning">
+                  Remember: Decreasing thresholds creates more sensitivity and faster alerts, but greatly increases the chance of fakeouts and noise. Start with the default baseline, track the hit-rate on a quiet day vs a trending day, and adjust accordingly.
+                </Callout>
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="px-6 py-4 flex justify-end" style={{ borderTop: '1px solid #E8DDD0', background: 'rgba(232,221,208,0.2)' }}>
+              <button
+                onClick={() => setShowThresholdsInfo(false)}
+                className="px-4 py-1.5 rounded-lg text-sm font-semibold transition-all"
+                style={{ background: '#2C1810', color: '#FBF7F0' }}
+                onMouseEnter={e => e.target.style.background = '#3D2418'}
+                onMouseLeave={e => e.target.style.background = '#2C1810'}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

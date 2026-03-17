@@ -10,6 +10,7 @@ import IVRankGauge from '../components/IVRankGauge'
 import PlotWrapper from '../components/PlotWrapper'
 import LoadingSpinner from '../components/LoadingSpinner'
 import ErrorBanner from '../components/ErrorBanner'
+import InfoPanel, { Section, P, Callout, KV } from '../components/InfoPanel'
 
 // ── Shared Plotly Golden Hour layout defaults ─────────────────────────────────
 const LAYOUT_BASE = {
@@ -164,6 +165,41 @@ export default function MarketStructure() {
         </div>
       )}
 
+      <InfoPanel title="Understanding the IV Surface + IV Rank">
+        <Section title="What is Implied Volatility (IV)?">
+          <P>Every option has a price. Implied Volatility is what you get when you reverse-engineer that price through the Black-Scholes model — it's the market's consensus expectation of how much the underlying will move over the option's lifetime, expressed as an annualised percentage. When IV is 20%, the market expects roughly ±20% moves over the next year, or ±20%/√12 ≈ ±5.8% over the next month. IV is not a forecast — it's a price. It rises when demand for options increases (fear, uncertainty, upcoming events) and falls when demand drops (complacency, post-event calm).</P>
+        </Section>
+
+        <Section title="Reading the 3D Surface">
+          <P>The three axes are: X = Days to Expiry (DTE), Y = Moneyness (Strike ÷ Spot, where 1.0 = ATM), Z = Mid-IV%. The surface shows you the entire options market's pricing structure in one view.</P>
+          <Callout type="info">A healthy, normal surface has its lowest point near ATM (moneyness = 1.0) and rises toward both wings — this is the volatility smile. It slopes upward as DTE increases — this is the term structure. When either of these shapes distorts, it signals something.</Callout>
+          <P><strong>Steep left wing (moneyness &lt; 0.97 has very high IV):</strong> The market is aggressively pricing in downside tail risk. Institutions/hedgers are buying deep OTM puts. Often seen before major uncertainty events or when large players are hedging portfolios.</P>
+          <P><strong>Flat surface across strikes:</strong> IV is priced uniformly — the market sees no directional skew. Unusual. Either a very calm period or the market hasn't yet priced in known risks.</P>
+          <P><strong>Spike on a specific expiry:</strong> That particular expiry date has elevated IV across all strikes. Look at what event (RBI policy, Union Budget, quarterly results) falls within that expiry window — the spike IS the market pricing that event.</P>
+          <P><strong>Jagged/noisy spikes:</strong> Far OTM strikes with near-zero LTP produce unstable IV calculations. Ignore these — the solver is fitting noise, not real market pricing.</P>
+        </Section>
+
+        <Section title="The Summary Metrics Explained">
+          <KV label="Expiries" value="Number of distinct expiry dates for which Fyers returned chain data. The surface uses up to 6. More expiries = more complete surface across time." />
+          <KV label="Surface Pts" value="Total (strike × expiry) combinations with a successfully solved IV. Gaps appear where LTP was 0 (illiquid strike) or the solver didn't converge (deep OTM with near-zero premium). A good surface has 100+ points." />
+          <KV label="History Days" value="Days of daily IV snapshots stored locally. Builds from 0 on day 1 — the backend captures a snapshot at 15:20 IST each trading day. IV Rank becomes meaningful after 5+ days and reliable after 30+ days." />
+          <KV label="Current IV" value="Average implied volatility of near-ATM options (within 2% of spot) for the nearest expiry. This is the single number that summarises 'how expensive' options are right now." />
+        </Section>
+
+        <Section title="IV Rank — How to Use It">
+          <P>IV Rank tells you where current IV sits relative to its own history over the past year. Formula: <strong>(Current IV − 52w Low) ÷ (52w High − 52w Low) × 100</strong>. It answers "is IV high or low compared to its own recent history?" — which is more useful than the raw IV number alone.</P>
+          <Callout type="signal">IV Rank 0–30 (Low IV, green gauge): Options are cheap relative to history. This is a buying environment — volatility is likely to mean-revert upward. Consider long options strategies (buying straddles, strangles, calls or puts directionally). Premium is not expensive.</Callout>
+          <Callout type="warning">IV Rank 30–60 (Medium IV, amber gauge): Normal range. No strong edge from IV alone — rely on directional analysis. Neutral strategies (iron condors, butterflies) work here.</Callout>
+          <Callout type="signal">IV Rank 60–100 (High IV, red gauge): Options are expensive. This is a selling environment — volatility is likely to mean-revert downward. Consider short volatility strategies (selling spreads, covered calls, cash-secured puts). The key risk: IV can stay elevated or spike higher if the catalyst hasn't resolved yet. Never sell naked options in high IV without defining your risk.</Callout>
+        </Section>
+
+        <Section title="Implementing in Decision-Making">
+          <P><strong>Before entering any options trade:</strong> Check IV Rank first. If you're about to buy a call and IV Rank is 85, you're buying expensive. If IV Rank is 15 and you're about to sell a put spread, you may not be collecting enough premium to justify the risk.</P>
+          <P><strong>Identifying event risk:</strong> If the surface has a visible spike on a specific expiry's DTE column, something is being priced for that date. Research what events fall in that window before trading it.</P>
+          <P><strong>Post-event trades:</strong> IV typically collapses after a major event (earnings, RBI policy) regardless of which way the market moves — this is the "IV crush". Selling premium just before an event and buying it back after (if the underlying doesn't move too much) is a classic strategy, but dangerous because the event itself can move the underlying enough to offset the IV collapse.</P>
+        </Section>
+      </InfoPanel>
+
       {/* Skew + Term Structure */}
       <div className="grid grid-cols-2 gap-5">
         <div className="card p-0 overflow-hidden flex flex-col">
@@ -196,6 +232,37 @@ export default function MarketStructure() {
           }
         </div>
       </div>
+
+      <InfoPanel title="Understanding IV Skew + Term Structure">
+        <Section title="IV Skew — What It Shows">
+          <P>The skew chart plots implied volatility (Y axis) against moneyness — Strike ÷ Spot (X axis) — for a single expiry. Moneyness of 1.0 is ATM. Below 1.0 are OTM puts (and ITM calls). Above 1.0 are OTM calls (and ITM puts). The teal line is Call IV, the red line is Put IV for each strike.</P>
+          <Callout type="signal">Put IV consistently higher than Call IV is the normal state in equity markets and is called negative skew. The market systematically pays more for downside protection than upside participation. This reflects the asymmetry of fear — people buy puts to hedge portfolios but buy calls speculatively.</Callout>
+          <P><strong>The slope of the put IV line:</strong> A steep downward slope from far OTM puts (left side, moneyness ~0.95-0.97) toward ATM means institutions are aggressively paying up for tail risk protection — deep OTM puts are very expensive. The steeper the slope, the more the market fears a sharp sudden drop. Flat put skew = complacency.</P>
+          <P><strong>Call IV rising on the right wing:</strong> When OTM calls (moneyness &gt; 1.02) have elevated IV, it signals demand for upside exposure — often seen in trending rallies, short-squeeze environments, or when institutions are buying calls to participate in anticipated moves.</P>
+          <P><strong>When put and call IV converge or cross:</strong> The skew has flattened or reversed. This is unusual and often signals a regime change — either a bullish shift (puts are no longer bid, fear has left the market) or symmetric event risk where both directions are being protected equally.</P>
+        </Section>
+
+        <Section title="Implementing Skew in Decision-Making">
+          <Callout type="warning">Buying puts when put IV is much higher than call IV means you're paying a premium for the skew. The option is already expensive because everyone else wants the same protection. Consider put spreads (buy ATM put, sell OTM put) to reduce the cost of skew.</Callout>
+          <Callout type="info">Selling puts when put skew is steep means you're collecting the skew premium — you're getting paid more than fair value for taking on downside risk. This works well in high-IV-rank, steep-skew environments. Define your risk with a spread.</Callout>
+          <P><strong>Skew as a sentiment gauge:</strong> Monitor how the skew changes day to day. If put skew was steep yesterday and has flattened today, it means institutions are no longer buying protection aggressively — a potential sentiment shift worth watching. If call skew spikes suddenly, large players may be buying upside — a bullish signal.</P>
+          <P><strong>Calendar-adjusted skew:</strong> Compare the skew across different expiry tabs. If the near-term expiry has steeper put skew than the far-term, near-term downside fear dominates. If far-term put skew is steeper, there's concern about a later catalyst.</P>
+        </Section>
+
+        <Section title="Term Structure — What It Shows">
+          <P>The term structure plots ATM IV (Y axis) against Days to Expiry (X axis). Each dot is one expiry's ATM implied volatility. It shows how the market prices uncertainty across time.</P>
+          <Callout type="signal">Upward sloping (near low IV, far high IV) = normal contango. The market expects more cumulative uncertainty further out — makes intuitive sense. This is the default healthy state. Options with longer life cost more in IV terms.</Callout>
+          <Callout type="warning">Downward sloping (near high IV, far low IV) = backwardation. A near-term event dominates all pricing. Earnings, RBI policy decisions, election results, budget announcements — all create backwardation because the market cannot see past the event. The near-term expiry that brackets the event gets the elevated IV, everything after it is calm.</Callout>
+          <P><strong>Kink or bump in the middle:</strong> A specific intermediate expiry is elevated above the smooth curve. Look at what event falls within that expiry window — the bump IS the market pricing that event. This is how you identify which dates the market considers risky.</P>
+          <P><strong>Flat term structure:</strong> All expiries priced at similar IV. Either the market is uniformly calm or there's no clear dominant catalyst. Can happen in long low-volatility periods.</P>
+        </Section>
+
+        <Section title="Implementing Term Structure in Decision-Making">
+          <P><strong>Calendar spreads:</strong> Sell the expiry with the highest IV (most expensive), buy the expiry with lower IV. You profit if the expensive expiry's IV mean-reverts toward the cheaper one. This is a pure volatility trade, direction-neutral. Works best when term structure is inverted (near high, far low) and you expect the near-term event to resolve without a large move.</P>
+          <P><strong>Expiry selection for directional trades:</strong> If you have a directional view, pick your expiry carefully. Buying options in a high-IV expiry is expensive — you need a larger move to profit. If a low-IV expiry exists just before an event you're trading, it may offer better risk/reward than the event expiry itself (if your view is that the event produces a move before the expiry).</P>
+          <Callout type="info">The most actionable insight from term structure: when backwardation appears (near-term IV suddenly spikes above far-term), something specific is being priced for that near-term window. If you don't know what the event is, find out before trading that expiry.</Callout>
+        </Section>
+      </InfoPanel>
 
     </div>
   )

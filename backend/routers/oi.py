@@ -111,17 +111,27 @@ def get_oi_analysis(
             by_strike[s]["put_oi_change"]  = opt["oi_change"]
             by_strike[s]["put_ltp"]        = opt["ltp"]
 
-        # Compute gamma for GEX — graceful fallback to 0 if IV can't be solved
+        # Compute gamma for GEX
+        # Use mid-price (bid+ask average) when available — more stable for IV solving
+        # than LTP which can be stale. Fall back to LTP if bid/ask not available.
         gamma = 0.0
-        if opt["ltp"] > 0 and T > 0:
+        bid = opt.get("bid", 0)
+        ask = opt.get("ask", 0)
+        mid = (bid + ask) / 2.0 if bid > 0 and ask > 0 else opt["ltp"]
+        price_for_iv = mid if mid > 0 else opt["ltp"]
+
+        # Use a minimum T of 1 day to prevent IV solver failure on expiry day
+        T_for_iv = max(T, 1/365)
+
+        if price_for_iv > 0:
             iv = implied_volatility(
-                market_price=opt["ltp"],
-                S=spot, K=s, T=T,
+                market_price=price_for_iv,
+                S=spot, K=s, T=T_for_iv,
                 r=RISK_FREE_RATE,
                 option_type=opt["option_type"],
             )
             if iv is not None:
-                g = greeks(spot, s, T, RISK_FREE_RATE, iv, opt["option_type"])
+                g = greeks(spot, s, T_for_iv, RISK_FREE_RATE, iv, opt["option_type"])
                 gamma = g.get("gamma", 0.0)
 
         gex_inputs.append({
