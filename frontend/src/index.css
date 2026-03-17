@@ -1,0 +1,111 @@
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;600;700&family=Source+Sans+3:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── CSS variables — Golden Hour palette ─────────────────────────────────── */
+:root {
+  --bg:          #FBF7F0;
+  --surface:     #FFFFFF;
+  --border:      #E8DDD0;
+  --border-deep: #D4C4B0;
+  --teal:        #0D9488;
+  --red:         #DC2626;
+  --amber:       #D97706;
+  --gold:        #C8860A;
+  --muted:       #A89585;
+  --text:        #2C1810;
+  --text-2:      #7A6355;
+  --nav:         #2C1810;
+
+  --shadow-card: 0 1px 4px rgba(44,24,16,0.06), 0 4px 16px rgba(44,24,16,0.04);
+  --shadow-hover: 0 2px 8px rgba(44,24,16,0.10), 0 8px 24px rgba(44,24,16,0.06);
+}
+
+/* ── Base reset ───────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
+
+body {
+  background-color: var(--bg);
+  color: var(--text);
+  font-family: 'Source Sans 3', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  min-height: 100vh;
+}
+
+/* ── Typography utilities ────────────────────────────────────────────────── */
+.mono    { font-family: 'IBM Plex Mono', monospace; }
+.display { font-family: 'Playfair Display', Georgia, serif; }
+
+/* ── Card — lifted white surface on warm cream bg ────────────────────────── */
+.card {
+  background:    var(--surface);
+  border:        1px solid var(--border);
+  border-radius: 10px;
+  padding:       18px;
+  box-shadow:    var(--shadow-card);
+  transition:    box-shadow 0.2s ease, border-color 0.2s ease;
+}
+.card:hover {
+  box-shadow:    var(--shadow-hover);
+  border-color:  var(--border-deep);
+}
+
+/* ── Sign colours ────────────────────────────────────────────────────────── */
+.pos { color: var(--teal); }
+.neg { color: var(--red);  }
+.neu { color: var(--amber);}
+.gld { color: var(--gold); }
+
+/* ── Subtle warm texture on the page background ──────────────────────────── */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background-image:
+    radial-gradient(ellipse at 20% 10%, rgba(200,134,10,0.04) 0%, transparent 60%),
+    radial-gradient(ellipse at 80% 90%, rgba(217,119,6,0.04) 0%, transparent 60%);
+}
+main { position: relative; z-index: 1; }
+
+/* ── Plotly overrides — warm paper look ─────────────────────────────────── */
+.js-plotly-plot .plotly .bg     { fill: transparent !important; }
+.js-plotly-plot .plotly .gridlayer path { stroke: #E8DDD0 !important; }
+
+/* ── Range input ─────────────────────────────────────────────────────────── */
+input[type='range'] {
+  accent-color: var(--gold);
+  cursor: pointer;
+}
+
+/* ── Scrollbar — warm toned ──────────────────────────────────────────────── */
+::-webkit-scrollbar       { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--border-deep); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+
+/* ── Select / input ──────────────────────────────────────────────────────── */
+select, input { color-scheme: light; }
+
+/* ── Loading spinner — warm teal on cream ────────────────────────────────── */
+@keyframes spin { to { transform: rotate(360deg); } }
+.spinner {
+  width: 28px; height: 28px;
+  border: 2px solid var(--border);
+  border-top-color: var(--teal);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+/* ── Subtle fade-in for page content ─────────────────────────────────────── */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.fade-up { animation: fadeUp 0.35s ease both; }
+
