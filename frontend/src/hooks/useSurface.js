@@ -1,7 +1,8 @@
+// optionslens/frontend/src/hooks/useSurface.js
 import { useState, useEffect, useCallback } from 'react'
 import client from '../api/client'
 
-export default function useSurface(symbol) {
+export default function useSurface(symbol, interpolate = false) {
   const [data,    setData]    = useState(null)
   const [loading, setLoading] = useState(false)
   const [error,   setError]   = useState(null)
@@ -11,14 +12,16 @@ export default function useSurface(symbol) {
     setLoading(true)
     setError(null)
     try {
-      const res = await client.get(`/api/surface/${symbol}`)
+      const res = await client.get(`/api/surface/${symbol}`, {
+        params: { interpolate }
+      })
       setData(res.data)
     } catch (e) {
       setError(e.response?.data?.detail || e.message || 'Failed to fetch surface data')
     } finally {
       setLoading(false)
     }
-  }, [symbol])
+  }, [symbol, interpolate])
 
   useEffect(() => { fetch_() }, [fetch_])
 

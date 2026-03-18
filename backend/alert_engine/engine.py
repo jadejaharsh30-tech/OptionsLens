@@ -11,7 +11,10 @@ Changes from the original Streamlit app:
 
 Signal logic matches app_v2_final.py exactly:
   Stage 1 : oichp (Δ vs Settlement from Fyers) > threshold → enter pending_spikes
-            Start-time independent — uses Fyers' own prev-day settlement calculation
+            Start-time independent — uses Fyers' own prev-day settlement calculation.
+            When use_adaptive_threshold=True, threshold is the Nth percentile of
+            historical oichp distribution for this symbol — makes Stage 1 a genuine
+            outlier detector rather than an absolute cutoff.
   Stage 2 : oi_increasing vs SPIKE-POINT OI (not session open, not settlement)
             Correctly detects if writers still adding vs covering after spike
   Suppress: dual-side writing via oichp from chain_lookup (no DB queries)
@@ -30,6 +33,8 @@ from alert_engine.db import (
 from alert_engine.models import (
     EngineConfig, EngineState, PendingSpike, engine_state,
 )
+from alert_engine.percentile_threshold import get_adaptive_threshold
+from alert_engine.models import ALERT_ENGINE_DB
 from config import UNDERLYINGS
 from fyers_client import get_fyers, fetch_quote, fetch_expiry_list, fetch_option_chain
 from routers.chain import days_to_expiry
@@ -115,10 +120,6 @@ def is_dual_side_writing(strike: float, chain_lookup: dict) -> bool:
     """
     Suppression filter: if BOTH CE and PE at this strike have oichp > 200%
     simultaneously, it's event hedging (straddle/strangle) — suppress alert.
-
-    Uses oichp (Δ vs Settlement) from current chain_lookup — consistent with
-    signal detection. No DB queries needed.
-    Matches app_v2_final.py Section 5 exactly.
     """
     ce_row = chain_lookup.get((strike, "CE"))
     pe_row = chain_lookup.get((strike, "PE"))
@@ -149,7 +150,7 @@ def is_market_open() -> bool:
     except ImportError:
         from backports.zoneinfo import ZoneInfo
     now = datetime.now(ZoneInfo("Asia/Kolkata"))
-    if now.weekday() >= 5:   # Saturday=5, Sunday=6
+    if now.weekday() >= 5:
         return False
     open_t  = now.replace(hour=9,  minute=15, second=0, microsecond=0)
     close_t = now.replace(hour=15, minute=30, second=0, microsecond=0)
@@ -163,7 +164,7 @@ def run_symbol_tick(fyers, symbol: str, session_date: str,
     """
     One full engine cycle for one symbol.
     Direct port of run_engine_tick() from app_v2_final.py,
-    extended with symbol parameter throughout.
+    extended with symbol parameter and adaptive threshold support.
     Returns list of new confirmed alert dicts generated this tick.
     """
     new_alerts = []
@@ -182,173 +183,182 @@ def run_symbol_tick(fyers, symbol: str, session_date: str,
         logger.warning(f"[{symbol}] All expiries past — skipping tick.")
         return []
 
-    expiry_date = exp["date"]
+    expiry_date  = exp["date"]
+    expiry_epoch = exp["expiry"]
+
+    # ── Determine ATM strike range ────────────────────────────────────────────
     atm_strikes = get_atm_strikes(spot, sym_cfg["strike_step"], cfg.strikes_either_side)
 
     # ── Fetch option chain ────────────────────────────────────────────────────
-    chain_raw = fetch_option_chain(fyers, symbol, exp["expiry"], strike_count=10)
+    chain = fetch_option_chain(fyers, symbol, expiry_epoch,
+                               strike_count=cfg.strikes_either_side * 2 + 2)
+    if not chain:
+        return []
 
-    # Normalise rows — tag with symbol for multi-symbol DB
-    chain_rows = []
-    for opt in chain_raw:
-        chain_rows.append({
-            "timestamp":     now_str,
-            "session_date":  session_date,
-            "symbol":        symbol,
-            "expiry_date":   expiry_date,
-            "strike":        opt["strike"],
-            "option_type":   opt["option_type"],
-            "oi":            opt.get("oi", 0),
-            "oi_change":     opt.get("oi_change", 0),
-            "oi_change_pct": opt.get("oi_change_pct", 0),
-            "prev_oi":       opt.get("prev_oi", 0),
-            "ltp":           opt.get("ltp", 0),
-            "volume":        opt.get("volume", 0),
+    # Build lookup: (strike, opt_type) → row dict (for dual-side check + snapshot)
+    chain_lookup = {(r["strike"], r["option_type"]): r for r in chain}
+
+    # ── Write OI snapshots to DB ──────────────────────────────────────────────
+    snapshot_rows = []
+    for r in chain:
+        if r["strike"] not in atm_strikes:
+            continue
+        baseline = get_baseline(session_date, symbol, r["strike"], r["option_type"])
+        baseline_oi = baseline[0] if baseline else None
+        oi_pct_from_open = compute_oi_pct_from_baseline(r["oi"], baseline_oi)
+        snapshot_rows.append({
+            "timestamp":      now_str,
+            "session_date":   session_date,
+            "symbol":         symbol,
+            "expiry_date":    expiry_date,
+            "strike":         r["strike"],
+            "option_type":    r["option_type"],
+            "oi":             r["oi"],
+            "oi_change":      r.get("oi_change", 0),
+            "oi_change_pct":  r.get("oi_change_pct", 0),
+            "prev_oi":        r.get("prev_oi", 0),
+            "ltp":            r["ltp"],
+            "volume":         r.get("volume", 0),
         })
+    if snapshot_rows:
+        write_snapshots(snapshot_rows)
 
-    # Persist snapshots (rolling 20-min window, pruned in write_snapshots)
-    write_snapshots(chain_rows)
+    # Update live snapshot for UI display
+    state.chain_snapshot[symbol] = snapshot_rows
 
-    # Store snapshot for UI chain table
-    state.chain_snapshot[symbol] = {
-        "spot":        spot,
-        "expiry_date": expiry_date,
-        "atm_strikes": atm_strikes,
-        "rows":        chain_rows,
-        "updated_at":  now_str,
-    }
+    # ── Per-strike signal detection ───────────────────────────────────────────
+    pending = state.pending_spikes.setdefault(symbol, {})
 
-    # Fast lookup: (strike, option_type) → row
-    chain_lookup = {(r["strike"], r["option_type"]): r for r in chain_rows}
+    for r in chain:
+        strike     = r["strike"]
+        opt_type   = r["option_type"]
+        key        = (strike, opt_type)
 
-    # Ensure per-symbol pending dict exists
-    if symbol not in state.pending_spikes:
-        state.pending_spikes[symbol] = {}
-    pending = state.pending_spikes[symbol]
+        if strike not in atm_strikes:
+            continue
 
-    # ── Core engine loop — per ATM strike per option type ─────────────────────
-    for strike in atm_strikes:
-        for opt_type in ("CE", "PE"):
-            key = (strike, opt_type)
-            row = chain_lookup.get(key)
-            if row is None:
+        current_oi  = r["oi"]
+        current_ltp = r["ltp"]
+        current_vol = r.get("volume", 0)
+
+        # Volume gate
+        if current_vol < cfg.min_volume_filter:
+            continue
+
+        # oichp — Δ vs Settlement (Fyers calculates this directly)
+        oi_pct = r.get("oi_change_pct", 0)
+
+        # OI speed
+        recent_df = get_recent_snapshots(symbol, strike, opt_type, cfg.oi_speed_window_min)
+        oi_speed  = compute_oi_speed(recent_df)
+
+        # Session baseline — written for display only, NOT for signal detection
+        baseline = get_baseline(session_date, symbol, strike, opt_type)
+        if baseline is None:
+            write_baseline(session_date, symbol, strike, opt_type,
+                           current_oi, current_ltp, now_str)
+
+        # ── STAGE 1: Spike detection ──────────────────────────────────────────
+        # Resolve threshold: adaptive (percentile-based) or static flat value
+        if cfg.use_adaptive_threshold:
+            threshold = get_adaptive_threshold(
+                db_path=ALERT_ENGINE_DB,
+                symbol=symbol,
+                option_type=opt_type,
+                percentile=cfg.adaptive_percentile,
+                min_samples=50,
+                static_fallback=cfg.oi_spike_threshold_pct,
+            )
+        else:
+            threshold = cfg.oi_spike_threshold_pct
+
+        if (oi_pct >= threshold
+                and key not in pending
+                and not already_alerted_today(session_date, symbol, strike, opt_type)):
+            pending[key] = PendingSpike(
+                fired_at=datetime.now(),
+                ltp_at_spike=current_ltp,
+                oi_at_spike=current_oi,
+                oi_pct=oi_pct,
+                oi_speed=oi_speed,
+            )
+            logger.info(
+                f"[{symbol}] Stage 1 fired: {strike}{opt_type} "
+                f"oichp +{oi_pct:.0f}% vs settlement "
+                f"(threshold: {threshold:.0f}%"
+                f"{' adaptive' if cfg.use_adaptive_threshold else ' static'})"
+            )
+
+        # ── STAGE 2: Premium confirmation window ──────────────────────────────
+        if key in pending:
+            spike = pending[key]
+            spike.polls_waited += 1
+
+            prem_behavior = classify_premium_behavior(
+                oi_increasing=(current_oi > spike.oi_at_spike),
+                ltp_now=current_ltp,
+                ltp_baseline=spike.ltp_at_spike,
+            )
+
+            signal_dir, trade_opt = map_signal_to_trade(opt_type, prem_behavior)
+            confirmed  = signal_dir is not None
+            timed_out  = spike.polls_waited >= cfg.premium_confirm_polls
+
+            if not (confirmed or timed_out):
                 continue
 
-            current_oi  = row["oi"]
-            current_ltp = row["ltp"]
-            current_vol = row["volume"]
+            # Remove from pending regardless of outcome
+            del pending[key]
 
-            # Liquidity gate — skip illiquid strikes
-            if current_vol < cfg.min_volume_filter and current_oi == 0:
+            base_record = {
+                "triggered_at":    now_str,
+                "session_date":    session_date,
+                "symbol":          symbol,
+                "expiry_date":     expiry_date,
+                "strike":          strike,
+                "option_type":     opt_type,
+                "trade_strike":    strike,
+                "trade_option":    trade_opt,
+                "oi_pct_change":   round(spike.oi_pct, 2),
+                "oi_speed_pct_pm": round(spike.oi_speed, 2),
+                "ltp_at_trigger":  spike.ltp_at_spike,
+                "ltp_confirmed":   current_ltp,
+                "premium_behavior": prem_behavior,
+            }
+
+            if not confirmed:
+                write_alert({**base_record,
+                    "signal_direction": None,
+                    "confidence":       "N/A",
+                    "suppressed":       1,
+                    "suppress_reason":  "PREMIUM_NOT_CONFIRMED"})
                 continue
 
-            # ── PRIMARY METRIC: oichp from Fyers = Δ vs Settlement ────────────
-            # % change from yesterday's closing OI (prev_oi).
-            # Fyers calculates: ((oi - prev_oi) / prev_oi) * 100
-            # Start-time independent — correct reference regardless of when app started.
-            oi_pct = row['oi_change_pct']   # oichp — Δ vs Settlement (Fix 1)
+            if is_dual_side_writing(strike, chain_lookup):
+                write_alert({**base_record,
+                    "signal_direction": signal_dir,
+                    "confidence":       "SUPPRESSED",
+                    "suppressed":       1,
+                    "suppress_reason":  "DUAL_SIDE_WRITING"})
+                continue
 
-            # ── OI speed — still uses rolling snapshots ────────────────────────
-            recent_df = get_recent_snapshots(symbol, strike, opt_type, cfg.oi_speed_window_min)
-            oi_speed  = compute_oi_speed(recent_df)
+            # ── CONFIRMED ALERT ───────────────────────────────────────────────
+            confidence = score_confidence(spike.oi_pct, spike.oi_speed, current_vol)
+            alert = {**base_record,
+                     "signal_direction": signal_dir,
+                     "confidence":       confidence,
+                     "suppressed":       0,
+                     "suppress_reason":  None}
 
-            # ── Session baseline — written for display only (Δ vs Open column) ─
-            # NOT used for signal detection.
-            baseline = get_baseline(session_date, symbol, strike, opt_type)
-            if baseline is None:
-                write_baseline(session_date, symbol, strike, opt_type,
-                               current_oi, current_ltp, now_str)
+            write_alert(alert)
+            new_alerts.append(alert)
+            state.alert_count_session += 1
 
-            # ── STAGE 1: Spike detection ──────────────────────────────────────
-            # Trigger: oichp (Δ vs Settlement) >= threshold
-            if (oi_pct >= cfg.oi_spike_threshold_pct
-                    and key not in pending
-                    and not already_alerted_today(session_date, symbol, strike, opt_type)):
-                pending[key] = PendingSpike(
-                    fired_at=datetime.now(),
-                    ltp_at_spike=current_ltp,
-                    oi_at_spike=current_oi,   # Fix 2: store spike-point OI for Stage 2
-                    oi_pct=oi_pct,
-                    oi_speed=oi_speed,
-                )
-                logger.info(
-                    f"[{symbol}] Stage 1 fired: {strike}{opt_type} "
-                    f"oichp +{oi_pct:.0f}% vs settlement"
-                )
-
-            # ── STAGE 2: Premium confirmation window ──────────────────────────
-            if key in pending:
-                spike = pending[key]
-                spike.polls_waited += 1
-
-                # Fix 2: oi_increasing vs SPIKE-POINT OI, not session baseline
-                # Detects if writers are still adding vs covering after the spike
-                prem_behavior = classify_premium_behavior(
-                    oi_increasing=(current_oi > spike.oi_at_spike),
-                    ltp_now=current_ltp,
-                    ltp_baseline=spike.ltp_at_spike,
-                )
-
-                signal_dir, trade_opt = map_signal_to_trade(opt_type, prem_behavior)
-                confirmed  = signal_dir is not None
-                timed_out  = spike.polls_waited >= cfg.premium_confirm_polls
-
-                if not (confirmed or timed_out):
-                    continue
-
-                # Remove from pending regardless of outcome
-                del pending[key]
-
-                base_record = {
-                    "triggered_at":    now_str,
-                    "session_date":    session_date,
-                    "symbol":          symbol,
-                    "expiry_date":     expiry_date,
-                    "strike":          strike,
-                    "option_type":     opt_type,
-                    "trade_strike":    strike,
-                    "trade_option":    trade_opt,
-                    "oi_pct_change":   round(spike.oi_pct, 2),
-                    "oi_speed_pct_pm": round(spike.oi_speed, 2),
-                    "ltp_at_trigger":  spike.ltp_at_spike,
-                    "ltp_confirmed":   current_ltp,
-                    "premium_behavior": prem_behavior,
-                }
-
-                if not confirmed:
-                    write_alert({**base_record,
-                        "signal_direction": None,
-                        "confidence":       "N/A",
-                        "suppressed":       1,
-                        "suppress_reason":  "PREMIUM_NOT_CONFIRMED"})
-                    continue
-
-                # Fix 3: dual-side writing uses chain_lookup oichp — no DB queries
-                if is_dual_side_writing(strike, chain_lookup):
-                    write_alert({**base_record,
-                        "signal_direction": signal_dir,
-                        "confidence":       "SUPPRESSED",
-                        "suppressed":       1,
-                        "suppress_reason":  "DUAL_SIDE_WRITING"})
-                    continue
-
-                # ── CONFIRMED ALERT ───────────────────────────────────────────
-                confidence = score_confidence(spike.oi_pct, spike.oi_speed, current_vol)
-                alert = {**base_record,
-                         "signal_direction": signal_dir,
-                         "confidence":       confidence,
-                         "suppressed":       0,
-                         "suppress_reason":  None}
-
-                write_alert(alert)
-                new_alerts.append(alert)
-                state.alert_count_session += 1
-
-                logger.info(
-                    f"CONFIRMED ALERT [{confidence}] {symbol} "
-                    f"{strike}{opt_type} → {signal_dir} | "
-                    f"OI: +{spike.oi_pct:.0f}% | Speed: {spike.oi_speed:.1f}%/min"
-                )
+            logger.info(
+                f"CONFIRMED ALERT [{confidence}] {symbol} "
+                f"{strike}{opt_type} → {signal_dir} | "
+                f"OI: +{spike.oi_pct:.0f}% | Speed: {spike.oi_speed:.1f}%/min"
+            )
 
     return new_alerts
 
@@ -361,7 +371,7 @@ async def engine_task(token: str, cfg: EngineConfig):
     One iteration = poll all configured symbols sequentially.
     asyncio.sleep() yields control so FastAPI stays responsive during waits.
     """
-    init_db()   # ensure tables exist
+    init_db()
     fyers = get_fyers(token)
 
     engine_state.running             = True
@@ -376,6 +386,7 @@ async def engine_task(token: str, cfg: EngineConfig):
         f"Engine started — symbols: {cfg.symbols} | "
         f"interval: {cfg.poll_interval_sec}s | "
         f"spike threshold: {cfg.oi_spike_threshold_pct}%"
+        f"{' (adaptive ' + str(cfg.adaptive_percentile) + 'th pct)' if cfg.use_adaptive_threshold else ''}"
     )
 
     while engine_state.running:

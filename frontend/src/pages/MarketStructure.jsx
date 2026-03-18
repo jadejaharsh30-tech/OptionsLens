@@ -1,12 +1,13 @@
 // Module 1 — Market Structure
 // Charts: 3D IV surface, per-expiry skew curves, ATM term structure
-// Also shows IV Rank gauge row + summary metrics
+// Also shows IV Rank gauge row + summary metrics + IV vs RV panel
 
 import { useState } from 'react'
 import { useApp } from '../context/AppContext'
 import useSurface from '../hooks/useSurface'
 import useIVRank from '../hooks/useIVRank'
 import IVRankGauge from '../components/IVRankGauge'
+import IVvsRVPanel from '../components/IVvsRVPanel'
 import PlotWrapper from '../components/PlotWrapper'
 import LoadingSpinner from '../components/LoadingSpinner'
 import ErrorBanner from '../components/ErrorBanner'
@@ -29,10 +30,12 @@ const TITLE_STYLE = { font: { color: '#2C1810', size: 13, family: 'Source Sans 3
 
 export default function MarketStructure() {
   const { symbol } = useApp()
-  const { data: surface, loading, error, refetch } = useSurface(symbol)
-  const { data: ivrank } = useIVRank(symbol)
 
-  const [activeExpiry, setActiveExpiry] = useState(null)
+  const [activeExpiry,   setActiveExpiry]   = useState(null)
+  const [sviInterpolate, setSviInterpolate] = useState(false)
+
+  const { data: surface, loading, error, refetch } = useSurface(symbol, sviInterpolate)
+  const { data: ivrank } = useIVRank(symbol)
 
   if (loading) return <LoadingSpinner label={`Fetching IV surface for ${symbol}…`} />
   if (error)   return <ErrorBanner message={error} onRetry={refetch} />
@@ -48,20 +51,35 @@ export default function MarketStructure() {
   surface.surface.forEach(r => { lookup[`${r.moneyness}_${r.days_to_expiry}`] = r.mid_iv })
   const zMatrix = monRows.map(m => dteCols.map(d => lookup[`${m}_${d}`] ?? null))
 
-  const surface3DData = [{
-    type:       'surface',
-    x:          dteCols,
-    y:          monRows,
-    z:          zMatrix,
-    colorscale: [[0,'#00d4aa'],[0.35,'#00d4aa'],[0.65,'#ffa502'],[1,'#ff4757']],
-    showscale:  true,
-    opacity:    0.92,
-    colorbar: {
-      title: 'IV %', titlefont: { color: '#7A6355', size: 10 },
-      tickfont: { color: '#7A6355', size: 10 }, thickness: 12, len: 0.6,
+  // Separate interpolated points for overlay scatter
+  const interpPts = sviInterpolate ? surface.surface.filter(r => r.interpolated) : []
+
+  const surface3DData = [
+    {
+      type:       'surface',
+      x:          dteCols,
+      y:          monRows,
+      z:          zMatrix,
+      colorscale: [[0,'#00d4aa'],[0.35,'#00d4aa'],[0.65,'#ffa502'],[1,'#ff4757']],
+      showscale:  true,
+      opacity:    0.92,
+      colorbar: {
+        title: 'IV %', titlefont: { color: '#7A6355', size: 10 },
+        tickfont: { color: '#7A6355', size: 10 }, thickness: 12, len: 0.6,
+      },
+      hovertemplate: 'DTE: %{x}d<br>Moneyness: %{y:.4f}<br>IV: %{z:.1f}%<extra></extra>',
     },
-    hovertemplate: 'DTE: %{x}d<br>Moneyness: %{y:.4f}<br>IV: %{z:.1f}%<extra></extra>',
-  }]
+    // SVI fitted points overlay — only visible when interpolate is on
+    ...(interpPts.length > 0 ? [{
+      type: 'scatter3d', mode: 'markers', name: 'SVI fitted',
+      x: interpPts.map(r => r.days_to_expiry),
+      y: interpPts.map(r => r.moneyness),
+      z: interpPts.map(r => r.mid_iv),
+      marker: { size: 2.5, color: '#D97706', opacity: 0.55 },
+      hovertemplate: 'DTE: %{x}d<br>Moneyness: %{y:.4f}<br>IV (SVI): %{z:.1f}%<extra></extra>',
+      showlegend: true,
+    }] : []),
+  ]
 
   const surface3DLayout = {
     ...LAYOUT_BASE,
@@ -154,6 +172,29 @@ export default function MarketStructure() {
         )}
       </div>
 
+      {/* IV vs Realized Vol Panel */}
+      <IVvsRVPanel data={ivrank} />
+
+      {/* SVI toggle */}
+      <div className="flex items-center gap-3">
+        <button
+          onClick={() => setSviInterpolate(v => !v)}
+          className="text-xs mono px-3 py-1.5 rounded transition-all"
+          style={{
+            background: sviInterpolate ? 'rgba(200,134,10,0.12)' : 'transparent',
+            color:       sviInterpolate ? '#C8860A' : '#A89585',
+            border:      sviInterpolate ? '1px solid rgba(200,134,10,0.3)' : '1px solid #E8DDD0',
+          }}
+        >
+          {sviInterpolate ? '◆ SVI interpolated' : '◇ Raw surface'}
+        </button>
+        {sviInterpolate && (
+          <span className="text-xs mono" style={{ color: '#A89585' }}>
+            Amber dots = SVI fitted points · solid mesh = market data
+          </span>
+        )}
+      </div>
+
       {/* 3D Surface */}
       {zMatrix.length > 0 && dteCols.length > 0 ? (
         <div className="card p-0 overflow-hidden">
@@ -177,6 +218,7 @@ export default function MarketStructure() {
           <P><strong>Flat surface across strikes:</strong> IV is priced uniformly — the market sees no directional skew. Unusual. Either a very calm period or the market hasn't yet priced in known risks.</P>
           <P><strong>Spike on a specific expiry:</strong> That particular expiry date has elevated IV across all strikes. Look at what event (RBI policy, Union Budget, quarterly results) falls within that expiry window — the spike IS the market pricing that event.</P>
           <P><strong>Jagged/noisy spikes:</strong> Far OTM strikes with near-zero LTP produce unstable IV calculations. Ignore these — the solver is fitting noise, not real market pricing.</P>
+          <P><strong>SVI interpolation:</strong> Toggle "SVI interpolated" to smooth gaps in the surface. The SVI (Stochastic Volatility Inspired) model fits a parametric smile curve per expiry and fills in strikes where no market data exists. Amber dots show the fitted points. Use the smoothed surface for visual analysis; rely on market data (raw mode) for actual trade pricing.</P>
         </Section>
 
         <Section title="The Summary Metrics Explained">

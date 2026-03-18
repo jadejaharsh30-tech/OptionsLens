@@ -8,7 +8,10 @@ TEST_DB = "/tmp/test_optionslens.db"
 import config
 config.DB_PATH = TEST_DB
 
-from snapshot_store import init_db, write_iv_snapshot, write_atm_iv, get_atm_iv_history, get_iv_rank
+from snapshot_store import (
+    init_db, write_iv_snapshot, write_atm_iv, get_atm_iv_history, get_iv_rank,
+    write_spot_price, get_spot_history,
+)
 
 
 def setup():
@@ -20,6 +23,8 @@ def teardown():
     if os.path.exists(TEST_DB):
         os.remove(TEST_DB)
 
+
+# ── Original tests ────────────────────────────────────────────────────────────
 
 def test_write_and_read_snapshot():
     setup()
@@ -34,7 +39,6 @@ def test_write_and_read_snapshot():
         ltp=150.0,
         oi=50000,
     )
-    # Also write to atm_iv_history so get_atm_iv_history returns data
     write_atm_iv(TEST_DB, "2025-01-15", "NIFTY", "23-01-2025", 0.14)
     history = get_atm_iv_history(TEST_DB, "NIFTY", days=90)
     assert len(history) == 1
@@ -57,7 +61,6 @@ def test_iv_rank_returns_none_with_no_history():
 
 def test_iv_rank_returns_none_with_insufficient_history():
     setup()
-    # Only 3 data points — need minimum 5
     for i in range(3):
         write_atm_iv(TEST_DB, f"2025-01-{i+1:02d}", "NIFTY", "23-01-2025", 0.10 + i * 0.01)
     result = get_iv_rank(TEST_DB, "NIFTY", current_iv=0.12, days=252)
@@ -66,10 +69,8 @@ def test_iv_rank_returns_none_with_insufficient_history():
 
 def test_iv_rank_calculation():
     setup()
-    # Write 10 days of history: IV ranging from 0.10 to 0.19
     for i in range(10):
         write_atm_iv(TEST_DB, f"2025-01-{i+1:02d}", "NIFTY", "23-01-2025", 0.10 + i * 0.01)
-    # current IV = 0.14 → rank = (0.14 - 0.10) / (0.19 - 0.10) × 100 = 44.44%
     rank = get_iv_rank(TEST_DB, "NIFTY", current_iv=0.14, days=252)
     assert rank is not None
     assert abs(rank - 44.44) < 0.1, f"Expected ~44.44, got {rank}"
@@ -104,30 +105,24 @@ def test_different_symbols_isolated():
     teardown()
 
 
-if __name__ == "__main__":
-    tests = [
-        test_write_and_read_snapshot,
-        test_duplicate_snapshot_ignored,
-        test_iv_rank_returns_none_with_no_history,
-        test_iv_rank_returns_none_with_insufficient_history,
-        test_iv_rank_calculation,
-        test_iv_rank_at_minimum_is_zero,
-        test_iv_rank_at_maximum_is_100,
-        test_different_symbols_isolated,
-    ]
+# ── New spot_history tests ────────────────────────────────────────────────────
 
-    passed = failed = 0
-    for t in tests:
-        try:
-            t()
-            print(f"  ✅ PASS  {t.__name__}")
-            passed += 1
-        except Exception as e:
-            print(f"  ❌ FAIL  {t.__name__} — {e}")
-            failed += 1
-        finally:
-            teardown()  # always clean up
+def test_write_and_read_spot_history():
+    setup()
+    write_spot_price(TEST_DB, "2025-01-15", "NIFTY", 22500.5)
+    write_spot_price(TEST_DB, "2025-01-16", "NIFTY", 22600.0)
+    history = get_spot_history(TEST_DB, "NIFTY", days=30)
+    assert len(history) == 2
+    # Most recent first
+    assert abs(history[0]["spot"] - 22600.0) < 1e-3
+    assert abs(history[1]["spot"] - 22500.5) < 1e-3
+    teardown()
 
-    print(f"\n{'='*50}")
-    print(f"  {passed}/{passed+failed} tests passed")
-    print("  🎉 All tests passed" if failed == 0 else f"  ⚠️  {failed} failed")
+def test_spot_history_duplicate_ignored():
+    setup()
+    write_spot_price(TEST_DB, "2025-01-15", "NIFTY", 22500.5)
+    write_spot_price(TEST_DB, "2025-01-15", "NIFTY", 99999.0)   # duplicate date
+    history = get_spot_history(TEST_DB, "NIFTY", days=30)
+    assert len(history) == 1
+    assert abs(history[0]["spot"] - 22500.5) < 1e-3   # first write wins
+    teardown()

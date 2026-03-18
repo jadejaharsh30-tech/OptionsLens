@@ -17,12 +17,15 @@ class EngineConfig:
     Defaults match the proven values from app_v2_final.py.
     """
     symbols:                list  = field(default_factory=lambda: ["NIFTY", "BANKNIFTY"])
-    poll_interval_sec:      int   = 10     # matches app_v2_final.py POLL_INTERVAL_SEC
+    poll_interval_sec:      int   = 10
     oi_spike_threshold_pct: float = 500.0
     oi_speed_window_min:    int   = 5
     premium_confirm_polls:  int   = 4
     min_volume_filter:      int   = 100
     strikes_either_side:    int   = 1
+    # ── Adaptive threshold fields ─────────────────────────────────────────────
+    use_adaptive_threshold: bool  = False   # if True, derive threshold from history
+    adaptive_percentile:    float = 90.0    # Nth percentile of historical oichp values
 
 
 @dataclass

@@ -1,8 +1,8 @@
 # optionslens/backend/scheduler.py
 """
 Daily IV snapshot job — runs at 15:20 IST every market day.
-Snapshots ATM IV for all configured underlyings and writes to SQLite.
-This builds the historical IV store used by /api/ivrank.
+Snapshots ATM IV and spot price for all configured underlyings, writes to SQLite.
+This builds the historical IV store used by /api/ivrank (IV Rank + Realized Vol).
 
 Token registration: when the user validates their token via
 /api/auth/validate, it is registered here for the cron job to use.
@@ -14,7 +14,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from fyers_client import fetch_expiry_list, fetch_option_chain, fetch_quote, get_fyers
 from iv_engine import implied_volatility
-from snapshot_store import init_db, write_iv_snapshot, write_atm_iv
+from snapshot_store import init_db, write_iv_snapshot, write_atm_iv, write_spot_price
 from config import UNDERLYINGS, RISK_FREE_RATE, DB_PATH
 
 logger    = logging.getLogger(__name__)
@@ -38,7 +38,7 @@ def register_token(token: str):
 
 async def run_daily_snapshot():
     """
-    Runs at 15:20 IST. Fetches live IV for all underlyings and persists to SQLite.
+    Runs at 15:20 IST. Fetches live IV + spot for all underlyings and persists to SQLite.
     Errors per-symbol are logged but never crash the server.
     """
     if not _snapshot_token:
@@ -54,9 +54,13 @@ async def run_daily_snapshot():
         try:
             spot     = fetch_quote(fyers, symbol_key)
             expiries = fetch_expiry_list(fyers, symbol_key)
+
             if not expiries:
                 logger.warning(f"No expiries for {symbol_key}, skipping.")
                 continue
+
+            # Persist today's closing spot price for realized vol computation
+            write_spot_price(DB_PATH, today, symbol_key, spot)
 
             # Use nearest non-expired expiry
             from routers.chain import days_to_expiry

@@ -1,16 +1,19 @@
 # optionslens/backend/routers/surface.py
 """
-GET /api/surface/{symbol}
+GET /api/surface/{symbol}?interpolate=false
 Fetches IV surface across all available expiries.
 Returns data for three frontend charts:
   1. 3D IV surface   (strike × days_to_expiry × IV)
   2. Skew curves     (per expiry: strike × call_iv / put_iv)
   3. Term structure  (ATM IV across expiries)
+
+Optional ?interpolate=true fills surface gaps using SVI parametric fitting.
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from auth import get_token
 from fyers_client import fetch_expiry_list, fetch_option_chain, fetch_quote, get_fyers
 from iv_engine import implied_volatility
+from svi_engine import interpolate_surface
 from config import UNDERLYINGS, RISK_FREE_RATE
 from routers.chain import days_to_expiry
 
@@ -21,7 +24,11 @@ MAX_EXPIRIES = 6
 
 
 @router.get("/{symbol}")
-def get_iv_surface(symbol: str, token: str = Depends(get_token)):
+def get_iv_surface(
+    symbol:      str,
+    interpolate: bool = Query(False, description="Fill surface gaps using SVI interpolation"),
+    token:       str  = Depends(get_token),
+):
     """
     Returns IV surface data across up to 6 expiries.
 
@@ -29,7 +36,7 @@ def get_iv_surface(symbol: str, token: str = Depends(get_token)):
     {
       symbol, spot,
       surface: [{expiry_date, days_to_expiry, strike, moneyness,
-                 call_iv, put_iv, mid_iv}],
+                 call_iv, put_iv, mid_iv, interpolated}],
       term_structure: [{expiry_date, days_to_expiry, atm_iv}],
       skew: {
         "<expiry_date>": [{strike, moneyness, call_iv, put_iv}]
@@ -44,9 +51,9 @@ def get_iv_surface(symbol: str, token: str = Depends(get_token)):
     spot     = fetch_quote(fyers, symbol)
     expiries = fetch_expiry_list(fyers, symbol)
 
-    surface_rows  = []
+    surface_rows   = []
     term_structure = []
-    skew: dict    = {}
+    skew: dict     = {}
 
     for exp in expiries[:MAX_EXPIRIES]:
         T = days_to_expiry(exp["date"])
@@ -101,6 +108,7 @@ def get_iv_surface(symbol: str, token: str = Depends(get_token)):
                 "call_iv":        call_iv,
                 "put_iv":         put_iv,
                 "mid_iv":         mid_iv,
+                "interpolated":   False,  # raw market data
             })
 
         # ── ATM IV for term structure ──
@@ -123,6 +131,11 @@ def get_iv_surface(symbol: str, token: str = Depends(get_token)):
             }
             for s in all_strikes
         ]
+
+    # ── Optional SVI gap-filling ──────────────────────────────────────────────
+    if interpolate and surface_rows:
+        extra_rows = interpolate_surface(surface_rows, spot)
+        surface_rows = surface_rows + extra_rows
 
     return {
         "symbol":         symbol,

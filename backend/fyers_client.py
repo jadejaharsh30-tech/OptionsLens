@@ -6,6 +6,7 @@ One FyersModel instance per request (stateless — token passed each time).
 NOTE: Fyers returns expiry dates in DD-MM-YYYY format (e.g. "24-04-2025").
       All date parsing in this project uses "%d-%m-%Y".
 """
+from datetime import date, timedelta
 from fyers_apiv3 import fyersModel
 from config import UNDERLYINGS
 
@@ -84,3 +85,58 @@ def fetch_option_chain(fyers, symbol_key: str, expiry_epoch: int,
             "ask":           opt.get("ask", 0),
         })
     return chain
+
+
+def fetch_historical_prices(fyers, symbol_key: str, days: int = 90) -> list[float]:
+    """
+    Fetch daily closing prices for a symbol going back `days` calendar days.
+
+    Uses Fyers v3 history API (daily resolution).
+    Returns a list of closing prices in chronological order (oldest first).
+    Returns an empty list on any API error — callers should handle gracefully.
+
+    Fyers history API params:
+        symbol      : e.g. "NSE:NIFTY50-INDEX"
+        resolution  : "D" for daily candles
+        date_format : "1" means epoch timestamps
+        range_from  : start epoch (int)
+        range_to    : end epoch (int)
+        cont_flag   : "1" (required for indices/continuous contracts)
+
+    Response candle format: [epoch, open, high, low, close, volume]
+    """
+    cfg        = UNDERLYINGS[symbol_key]
+    today      = date.today()
+    range_from = int((today - timedelta(days=days)).strftime("%s")
+                     if hasattr(today, 'strftime') else
+                     (today - timedelta(days=days)).timetuple())
+
+    # Cross-platform epoch calculation
+    import time
+    from datetime import datetime
+    start_dt   = datetime.combine(today - timedelta(days=days), datetime.min.time())
+    end_dt     = datetime.combine(today, datetime.min.time())
+    range_from = int(start_dt.timestamp())
+    range_to   = int(end_dt.timestamp())
+
+    try:
+        resp = fyers.history({
+            "symbol":      cfg["symbol"],
+            "resolution":  "D",
+            "date_format": "1",
+            "range_from":  str(range_from),
+            "range_to":    str(range_to),
+            "cont_flag":   "1",
+        })
+
+        if resp.get("s") != "ok":
+            return []
+
+        candles = resp.get("candles", [])
+        # Each candle: [epoch, open, high, low, close, volume]
+        # Extract close prices (index 4), chronological order
+        closes = [float(c[4]) for c in candles if len(c) >= 5]
+        return closes
+
+    except Exception:
+        return []

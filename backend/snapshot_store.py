@@ -1,7 +1,7 @@
 # optionslens/backend/snapshot_store.py
 """
-SQLite store for daily IV snapshots.
-Used to calculate IV Rank (IVR) and IV Percentile.
+SQLite store for daily IV snapshots and spot price history.
+Used to calculate IV Rank (IVR) and Realized Volatility.
 """
 import sqlite3
 from typing import Optional
@@ -35,6 +35,19 @@ def init_db(db_path: str = DB_PATH):
             UNIQUE(snapshot_date, symbol, expiry_date)
         )
     """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS spot_history (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            snapshot_date TEXT NOT NULL,
+            symbol        TEXT NOT NULL,
+            spot          REAL NOT NULL,
+            UNIQUE(snapshot_date, symbol)
+        )
+    """)
+    c.execute("""
+        CREATE INDEX IF NOT EXISTS idx_spot_history_symbol_date
+        ON spot_history(symbol, snapshot_date DESC)
+    """)
     conn.commit()
     conn.close()
 
@@ -64,6 +77,18 @@ def write_atm_iv(db_path: str, snapshot_date: str, symbol: str,
     conn.close()
 
 
+def write_spot_price(db_path: str, snapshot_date: str,
+                     symbol: str, spot: float):
+    """Persist today's closing spot price for realized vol computation."""
+    conn = sqlite3.connect(db_path)
+    conn.execute("""
+        INSERT OR IGNORE INTO spot_history (snapshot_date, symbol, spot)
+        VALUES (?, ?, ?)
+    """, (snapshot_date, symbol, spot))
+    conn.commit()
+    conn.close()
+
+
 def get_atm_iv_history(db_path: str, symbol: str,
                        days: int = 252) -> list[dict]:
     """Return ATM IV history for a symbol, most recent `days` entries."""
@@ -76,6 +101,20 @@ def get_atm_iv_history(db_path: str, symbol: str,
     """, (symbol, days)).fetchall()
     conn.close()
     return [{"date": r[0], "iv": r[1]} for r in rows]
+
+
+def get_spot_history(db_path: str, symbol: str,
+                     days: int = 252) -> list[dict]:
+    """Return spot price history for a symbol, most recent first."""
+    conn = sqlite3.connect(db_path)
+    rows = conn.execute("""
+        SELECT snapshot_date, spot FROM spot_history
+        WHERE symbol = ?
+        ORDER BY snapshot_date DESC
+        LIMIT ?
+    """, (symbol, days)).fetchall()
+    conn.close()
+    return [{"date": r[0], "spot": r[1]} for r in rows]
 
 
 def get_iv_rank(db_path: str, symbol: str,

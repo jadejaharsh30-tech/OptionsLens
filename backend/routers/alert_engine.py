@@ -34,12 +34,15 @@ _engine_task_handle: Optional[asyncio.Task] = None
 
 class StartRequest(BaseModel):
     symbols:                list  = ["NIFTY", "BANKNIFTY"]
-    poll_interval_sec:      int   = 10    # matches app_v2_final.py default
+    poll_interval_sec:      int   = 10
     oi_spike_threshold_pct: float = 500.0
     oi_speed_window_min:    int   = 5
     premium_confirm_polls:  int   = 4
     min_volume_filter:      int   = 100
     strikes_either_side:    int   = 1
+    # ── Adaptive threshold ────────────────────────────────────────────────────
+    use_adaptive_threshold: bool  = False
+    adaptive_percentile:    float = 90.0
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -56,7 +59,6 @@ async def start_engine(req: StartRequest, token: str = Depends(get_token)):
     if engine_state.running:
         raise HTTPException(status_code=409, detail="Engine is already running.")
 
-    # Validate symbols against config
     from config import UNDERLYINGS
     invalid = [s for s in req.symbols if s not in UNDERLYINGS]
     if invalid:
@@ -80,17 +82,24 @@ async def start_engine(req: StartRequest, token: str = Depends(get_token)):
         premium_confirm_polls  = req.premium_confirm_polls,
         min_volume_filter      = req.min_volume_filter,
         strikes_either_side    = req.strikes_either_side,
+        use_adaptive_threshold = req.use_adaptive_threshold,
+        adaptive_percentile    = req.adaptive_percentile,
     )
 
     _engine_task_handle = asyncio.create_task(engine_task(token, cfg))
-    logger.info(f"Engine task created — symbols: {cfg.symbols}")
+    logger.info(
+        f"Engine task created — symbols: {cfg.symbols} | "
+        f"adaptive: {cfg.use_adaptive_threshold}"
+    )
 
     return {
-        "started":               True,
-        "symbols":               cfg.symbols,
-        "poll_interval_sec":     cfg.poll_interval_sec,
+        "started":                True,
+        "symbols":                cfg.symbols,
+        "poll_interval_sec":      cfg.poll_interval_sec,
         "oi_spike_threshold_pct": cfg.oi_spike_threshold_pct,
-        "strikes_either_side":   cfg.strikes_either_side,
+        "use_adaptive_threshold": cfg.use_adaptive_threshold,
+        "adaptive_percentile":    cfg.adaptive_percentile,
+        "strikes_either_side":    cfg.strikes_either_side,
     }
 
 
@@ -122,7 +131,6 @@ def get_status(token: str = Depends(get_token)):
     Returns current engine state for the UI status indicator.
     Frontend polls this every 5 seconds.
     """
-    # Serialize pending spikes for JSON response
     pending_summary = {}
     for symbol, spikes in engine_state.pending_spikes.items():
         pending_summary[symbol] = [
@@ -136,6 +144,19 @@ def get_status(token: str = Depends(get_token)):
             for k, v in spikes.items()
         ]
 
+    config_out = None
+    if engine_state.config:
+        cfg = engine_state.config
+        config_out = {
+            "oi_spike_threshold_pct": cfg.oi_spike_threshold_pct,
+            "premium_confirm_polls":  cfg.premium_confirm_polls,
+            "strikes_either_side":    cfg.strikes_either_side,
+            "poll_interval_sec":      cfg.poll_interval_sec,
+            "min_volume_filter":      cfg.min_volume_filter,
+            "use_adaptive_threshold": cfg.use_adaptive_threshold,
+            "adaptive_percentile":    cfg.adaptive_percentile,
+        }
+
     return {
         "running":             engine_state.running,
         "started_at":          engine_state.started_at.isoformat()
@@ -148,22 +169,13 @@ def get_status(token: str = Depends(get_token)):
         "active_symbols":      engine_state.config.symbols
                                if engine_state.config else [],
         "pending_spikes":      pending_summary,
-        "config": {
-            "oi_spike_threshold_pct": engine_state.config.oi_spike_threshold_pct,
-            "premium_confirm_polls":  engine_state.config.premium_confirm_polls,
-            "strikes_either_side":    engine_state.config.strikes_either_side,
-            "poll_interval_sec":      engine_state.config.poll_interval_sec,
-            "min_volume_filter":      engine_state.config.min_volume_filter,
-        } if engine_state.config else None,
+        "config":              config_out,
     }
 
 
 @router.get("/alerts")
 def get_alerts(token: str = Depends(get_token)):
-    """
-    Returns today's confirmed (unsuppressed) alerts, newest first.
-    Frontend polls this every 5 seconds from AlertToast to detect new alerts.
-    """
+    """Returns today's confirmed (unsuppressed) alerts, newest first."""
     session_date = date.today().isoformat()
     alerts = load_alerts_today(session_date)
     return {
@@ -175,16 +187,13 @@ def get_alerts(token: str = Depends(get_token)):
 
 @router.get("/chain-snapshot")
 def get_chain_snapshot(token: str = Depends(get_token)):
-    """
-    Returns the latest chain snapshot for all monitored symbols.
-    Used to populate the live monitoring table in the AlertEngine page.
-    """
+    """Returns the latest chain snapshot for all monitored symbols."""
     return {"snapshots": engine_state.chain_snapshot}
 
 
 @router.delete("/alerts/{alert_id}")
 def suppress_alert_endpoint(alert_id: int, token: str = Depends(get_token)):
-    """Suppress a specific alert from the log (user decision to dismiss)."""
+    """Suppress a specific alert from the log."""
     try:
         suppress_alert(alert_id)
         return {"suppressed": True, "alert_id": alert_id}
