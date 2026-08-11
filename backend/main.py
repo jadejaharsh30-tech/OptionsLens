@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from scheduler import start_scheduler, register_token
 from auth import get_token
 from fyers_client import fetch_quote, get_fyers
+from alert_engine.db import init_db as init_alert_engine_db
 
 # ── Routers ───────────────────────────────────────────────────────────────────
 from routers.expiries     import router as expiries_router
@@ -35,6 +36,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     start_scheduler()
+    init_alert_engine_db()  # Ensure alert-engine tables exist before the frontend polls /alerts
     logger.info("OptionsLens API started.")
     yield
     logger.info("OptionsLens API shutting down.")
