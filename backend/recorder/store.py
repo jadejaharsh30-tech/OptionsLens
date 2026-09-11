@@ -15,10 +15,9 @@ import sqlite3
 from contextlib import contextmanager
 from typing import Iterator, Optional
 
+from config import MARKET_DATA_DB
 from market_hours import SessionPhase
 from recorder.models import ChainRow, ChainSnapshot
-
-MARKET_DATA_DB = "market_data.db"
 
 
 @contextmanager

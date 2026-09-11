@@ -74,15 +74,15 @@ differentiator. This is another reason the recorder is urgent.
 
 ## Master checklist — 55 items
 
-### Phase 0 — Foundations & correctness (blocks everything else)
+### Phase 0 — Foundations & correctness — COMPLETE
 
 - [x] 1. CAS-aware market session module (`market_hours.py`) — session phases, correct close times
 - [x] 2. Fix event-loop blocking: `run_symbol_tick` must run via `asyncio.to_thread` (`alert_engine/engine.py`)
 - [x] 3. Fractional time-to-expiry to the real expiry timestamp (fixes `T=0` killing IV/Greeks on expiry day)
 - [x] 4. Forward-based pricing — Black-76 against a forward implied from the chain's own ATM put-call parity (VIX-style min|C−P| rule). Removed a ~1 vol-point call/put IV gap that varied by strike and was being read as skew
-- [ ] 5. IV solver robustness — Newton-Raphson with bisection/Brent fallback (stops wings vanishing)
+- [x] 5. IV solver robustness — Newton-Raphson with bracketed bisection fallback and a Brenner-Subrahmanyam initial guess, plus a vega-based identifiability gate so the solver returns None rather than a fabricated IV where price is flat in vol
 - [x] 6. Unify IV pricing inputs — `chain_pricing.price_for_iv()` (mid, falling back to LTP) is now the single definition used by chain, surface, oi, ivrank and the daily snapshot job
-- [ ] 7. Honour `DB_PATH` env var so Docker persistence actually works
+- [x] 7. All three SQLite paths (`DB_PATH`, `ALERT_ENGINE_DB`, `MARKET_DATA_DB`) read from env; docker-compose points them at the mounted volume
 
 ### Phase 1 — Data capture (URGENT — every day missed is unrecoverable)
 
@@ -159,6 +159,16 @@ differentiator. This is another reason the recorder is urgent.
 
 Append one line per session. Keep it terse.
 
+- **2026-09-11 (4)** — Items 5 and 7. **Phase 0 complete.** Shared solver core:
+  Newton-Raphson with a bracketed bisection fallback and a Brenner-Subrahmanyam
+  initial guess. The important part is the vega-based identifiability gate — a
+  solver that always converges returns confident wrong answers where price is
+  flat in vol (deep ITM 7DTE was solving 26.25% against a true 16%). The gate
+  uses the quote's own resolution: if a one-vol-point move shifts the model
+  price by less than half a 0.05 tick, the IV is not in the data and we return
+  None. Swept 4 expiries x 48 strikes x both types: every non-None answer is now
+  exact. DB paths are env-configurable, so the Docker volume finally persists.
+  106 tests pass.
 - **2026-09-11 (3)** — Items 4 and 6. All IV is now Black-76 against a forward
   implied per expiry from the chain's own put-call parity. Measured on NIFTY-like
   inputs (1.3% dividend yield, 30d, true vol 15%), the old spot-based model

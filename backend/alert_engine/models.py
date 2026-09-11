@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
-ALERT_ENGINE_DB = "oi_engine.db"
+from config import ALERT_ENGINE_DB  # noqa: F401  (re-exported; env-configurable)
 
 
 @dataclass

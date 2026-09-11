@@ -76,7 +76,7 @@ The Fyers access token is the backbone of every request:
 
 - **Fyers expiry dates are DD-MM-YYYY** (e.g. `"24-04-2025"`); all date parsing uses `"%d-%m-%Y"`. Do not assume ISO format on anything coming from Fyers.
 - **Time to expiry comes from `market_hours.time_to_expiry()`** — fractional, measured to the real 15:30 IST expiry instant, IST-aware. Never reintroduce whole-day `(expiry - today).days`: that returns 0.0 across all of expiry day, which silently disables IV and Greeks everywhere, and `date.today()` is the wrong calendar day on a UTC host. `days_to_expiry` is a deprecated alias.
-- IV solver returns `None` for illiquid strikes (Vega → 0) rather than raising; downstream code must handle `None` IVs.
+- **The IV solver returns `None` when IV is not identifiable, and that is deliberate.** Newton-Raphson falls back to bracketed bisection, so convergence is not the constraint; the constraint is information. Deep ITM and far OTM prices are flat in vol, so a solver that always converges returns a confident wrong answer (7DTE deep ITM was solving 26.25% against a true 16%). `MIN_VEGA` in `iv_engine.py` gates on the quote's own resolution: if a one-vol-point move shifts the model price by less than half a 0.05 tick, there is no IV in the data. Downstream code must handle `None` — never substitute a default.
 - Option types are the NSE strings `"CE"` / `"PE"` throughout, not call/put booleans.
 - Unit conventions: engines work in decimals (IV 0.14), the API boundary returns percentages (14.0) — routers do the ×100. `greeks()` returns Vega/Rho per 1% move and Theta per calendar day; `bs_vega()` is per-unit (used by the solver).
 - Adding an underlying means adding one entry to `UNDERLYINGS` in `config.py` — symbol key, Fyers symbol string, lot size, strike step.
@@ -103,8 +103,7 @@ closes that now come from CAS. Consequences encoded in `market_hours.py`:
 
 ## Known quirks / tech debt
 
-- **`DB_PATH` env var is dead**: `docker-compose.yml` sets `DB_PATH` and mounts `./data`, but `config.py` hardcodes `DB_PATH = "optionslens.db"` and no backend code reads env vars — SQLite data does not actually persist across Docker rebuilds. Fixing persistence means making `config.py` read the env var.
-- `IV_SOLVER_*` constants in `config.py` are never imported; the real defaults are duplicated in `implied_volatility()`'s signature.
+- `IV_SOLVER_*` constants in `config.py` are never imported; the real defaults live in `iv_engine.py` (`IV_LOWER_BOUND`, `IV_UPPER_BOUND`, `MIN_VEGA`, `BISECTION_MAX_ITER`).
 - `routers/oi.py` solves IV from bid/ask mid; `chain.py`/`surface.py`/`ivrank.py` use raw LTP — the same strike can report slightly different IVs across endpoints. Mid is the better input (LTP goes stale on illiquid strikes); unifying this is roadmap item 6.
 - In-memory-only state lost on restart: the snapshot token (`scheduler.py`) and the alert-engine asyncio task handle. A restart before 15:20 IST silently skips that day's IV snapshot.
 - `fetch_historical_prices` (fyers_client.py) has a dead, broken epoch computation immediately overwritten by the correct one.

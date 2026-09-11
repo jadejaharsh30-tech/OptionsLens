@@ -72,6 +72,110 @@ def bs_vega(S: float, K: float, T: float, r: float, sigma: float) -> float:
     return S * _norm_pdf(d1) * math.sqrt(T)
 
 
+# ── Shared solver core ────────────────────────────────────────────────────────
+#
+# Plain Newton-Raphson is fast near the money and unreliable in the wings: vega
+# collapses toward zero for far OTM strikes, so the update step either explodes
+# or the vega guard bails out and returns None. That is why the edges of the IV
+# surface were empty — the data was there, the solver just gave up.
+#
+# Option price is strictly increasing in volatility, so a bracketed bisection
+# always converges when a solution exists. We keep Newton for speed and fall
+# back to bisection whenever it misbehaves, which makes the solver total: it
+# returns a value for every price inside the no-arbitrage bounds, and None only
+# when the quote genuinely admits no solution.
+
+IV_LOWER_BOUND = 1e-4    # 0.01% vol
+IV_UPPER_BOUND = 5.0     # 500% vol — anything above is a bad quote, not a vol
+BISECTION_MAX_ITER = 200
+
+# Identifiability gate.
+#
+# Being able to converge is not the same as the answer meaning anything. Deep
+# ITM and far OTM options have vega near zero: their price barely moves with
+# volatility, so many different vols reprice to the same quote and the solver
+# will happily return whichever one it landed on. Silently reporting that as an
+# IV is worse than reporting nothing, because it looks like data.
+#
+# The quote itself sets the resolution limit. NSE option prices move in 0.05
+# ticks, so if a one-vol-point change (0.01) moves the model price by less than
+# half a tick, the market price simply does not carry that information.
+OPTION_TICK_SIZE = 0.05
+MIN_VEGA = (OPTION_TICK_SIZE / 2) / 0.01   # = 2.5 price units per unit vol
+
+
+def _initial_vol_guess(market_price: float, forward: float, T: float) -> float:
+    """
+    Brenner-Subrahmanyam ATM approximation: sigma ~= sqrt(2*pi/T) * price / F.
+
+    A far better starting point than a flat 0.3 for short-dated options, where
+    a bad guess is what pushes Newton out of the bracket in the first place.
+    """
+    if forward <= 0 or T <= 0:
+        return 0.3
+    guess = math.sqrt(2.0 * math.pi / T) * market_price / forward
+    return min(max(guess, 0.01), 2.0)
+
+
+def _solve_implied_vol(price_at, vega_at, market_price: float,
+                       initial_guess: float, max_iter: int,
+                       tol: float, min_vega: float = MIN_VEGA) -> Optional[float]:
+    """
+    Solve price_at(sigma) == market_price for sigma.
+
+    Args:
+        price_at: sigma -> model price (must be increasing in sigma)
+        vega_at:  sigma -> d(price)/d(sigma)
+        min_vega: reject solutions where the price is too insensitive to vol
+                  for the answer to be identifiable (see MIN_VEGA)
+    """
+    def _accept(sigma: Optional[float]) -> Optional[float]:
+        if sigma is None:
+            return None
+        return sigma if abs(vega_at(sigma)) >= min_vega else None
+
+    lo, hi = IV_LOWER_BOUND, IV_UPPER_BOUND
+    price_lo, price_hi = price_at(lo), price_at(hi)
+
+    # Outside the attainable range there is no implied vol to find. This is a
+    # crossed/stale quote or an arbitrage violation, not a solver failure.
+    if market_price < price_lo - tol or market_price > price_hi + tol:
+        return None
+
+    # ── Newton-Raphson ────────────────────────────────────────────────────────
+    sigma = min(max(initial_guess, lo), hi)
+    for _ in range(max_iter):
+        price = price_at(sigma)
+        diff  = price - market_price
+        if abs(diff) < tol:
+            return _accept(sigma)
+
+        vega = vega_at(sigma)
+        if abs(vega) < 1e-10:
+            break                      # flat in sigma — hand over to bisection
+
+        nxt = sigma - diff / vega
+        if not math.isfinite(nxt) or not (lo <= nxt <= hi):
+            break                      # left the bracket — hand over to bisection
+        sigma = nxt
+
+    # ── Bisection fallback ────────────────────────────────────────────────────
+    for _ in range(BISECTION_MAX_ITER):
+        mid = 0.5 * (lo + hi)
+        price = price_at(mid)
+        if abs(price - market_price) < tol:
+            return _accept(mid)
+        if price < market_price:
+            lo = mid
+        else:
+            hi = mid
+        if hi - lo < 1e-12:
+            break
+
+    mid = 0.5 * (lo + hi)
+    return _accept(mid) if abs(price_at(mid) - market_price) < tol * 10 else None
+
+
 def implied_volatility(
     market_price: float,
     S: float,
@@ -81,45 +185,33 @@ def implied_volatility(
     option_type: OptionType,
     max_iter: int = 100,
     tol: float = 1e-6,
-    initial_guess: float = 0.3,
+    initial_guess: Optional[float] = None,
 ) -> Optional[float]:
     """
-    Implied volatility via Newton-Raphson iteration.
+    Implied volatility against spot-based Black-Scholes.
 
-    Solves: BS(sigma) = market_price
-    Update: sigma_new = sigma_old - (BS(sigma_old) - market_price) / Vega(sigma_old)
+    Prefer `implied_vol_forward` in new code: pricing off spot with no dividend
+    yield biases call and put IVs in opposite directions. This is kept for the
+    Position Lab and for tests.
 
-    Returns:
-        Implied volatility as a decimal (e.g. 0.25 = 25%), or None if:
-        - market_price <= 0 (illiquid / missing)
-        - solver fails to converge
-        - vega is near zero (deep OTM, can't solve)
+    Returns IV as a decimal (0.25 = 25%), or None when the quote admits no
+    solution (non-positive price, expired, or outside no-arbitrage bounds).
     """
-    if market_price is None or market_price <= 0:
-        return None
-    if T <= 0:
+    if market_price is None or market_price <= 0 or T <= 0:
         return None
 
-    sigma = initial_guess
+    forward = S * math.exp(r * T)
+    guess = initial_guess if initial_guess is not None else \
+        _initial_vol_guess(market_price, forward, T)
 
-    for _ in range(max_iter):
-        price = bs_price(S, K, T, r, sigma, option_type)
-        vega  = bs_vega(S, K, T, r, sigma)
-
-        if abs(vega) < 1e-10:
-            # Vega too small to divide — deep OTM, can't solve
-            return None
-
-        diff = price - market_price
-        if abs(diff) < tol:
-            return sigma if 0 < sigma < 10 else None  # sanity bound
-
-        sigma = sigma - diff / vega
-
-        # Clamp sigma to valid range each iteration
-        sigma = max(1e-6, min(sigma, 10.0))
-
-    return None  # Did not converge
+    return _solve_implied_vol(
+        price_at = lambda sig: bs_price(S, K, T, r, sig, option_type),
+        vega_at  = lambda sig: bs_vega(S, K, T, r, sig),
+        market_price  = market_price,
+        initial_guess = guess,
+        max_iter      = max_iter,
+        tol           = tol,
+    )
 
 
 # ── Black-76: options priced off the FORWARD, not spot ────────────────────────
@@ -190,14 +282,18 @@ def implied_vol_forward(
     option_type: OptionType,
     max_iter: int = 100,
     tol: float = 1e-6,
-    initial_guess: float = 0.3,
+    initial_guess: Optional[float] = None,
 ) -> Optional[float]:
     """
-    Implied volatility against Black-76. Newton-Raphson, same as the spot solver.
+    Implied volatility against Black-76 — the solver the app actually uses.
 
     Because calls and puts at one strike share a single forward, the call IV and
-    put IV they produce agree to within bid-ask noise — which is the whole point
-    of doing this. Returns None on the same conditions as `implied_volatility`.
+    put IV they produce agree to within bid-ask noise, which is the whole point
+    of pricing off the forward.
+
+    Uses the shared Newton-with-bisection-fallback core, so far OTM strikes
+    (where vega collapses and plain Newton bails out) still return a value
+    instead of silently vanishing from the surface.
     """
     if market_price is None or market_price <= 0 or T <= 0 or F <= 0:
         return None
@@ -208,22 +304,17 @@ def implied_vol_forward(
     if market_price < intrinsic - 1e-9:
         return None
 
-    sigma = initial_guess
-    for _ in range(max_iter):
-        price = black76_price(F, K, T, r, sigma, option_type)
-        vega  = black76_vega(F, K, T, r, sigma)
+    guess = initial_guess if initial_guess is not None else \
+        _initial_vol_guess(market_price, F, T)
 
-        if abs(vega) < 1e-10:
-            return None
-
-        diff = price - market_price
-        if abs(diff) < tol:
-            return sigma if 0 < sigma < 10 else None
-
-        sigma = sigma - diff / vega
-        sigma = max(1e-6, min(sigma, 10.0))
-
-    return None
+    return _solve_implied_vol(
+        price_at = lambda sig: black76_price(F, K, T, r, sig, option_type),
+        vega_at  = lambda sig: black76_vega(F, K, T, r, sig),
+        market_price  = market_price,
+        initial_guess = guess,
+        max_iter      = max_iter,
+        tol           = tol,
+    )
 
 
 def black76_greeks(

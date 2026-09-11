@@ -9,7 +9,11 @@ services:
     volumes:
       - ./data:/app/data       # SQLite DB persists between restarts
     environment:
+      # All three stores live on the mounted volume so they survive rebuilds.
+      # The recorded chain data in particular cannot be regenerated.
       - DB_PATH=/app/data/optionslens.db
+      - ALERT_ENGINE_DB=/app/data/oi_engine.db
+      - MARKET_DATA_DB=/app/data/market_data.db
 
   frontend:
     build:
