@@ -2,6 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Read this first
+
+**`docs/ROADMAP.md` is the project's durable memory.** It holds the 55-item
+phased checklist (signal research → backtesting → trade lifecycle → notifications),
+the guiding principles, the CAS regulatory findings, and a progress log. Read it
+at the start of every session and tick items off as they land.
+
 ## What this is
 
 NSE options market intelligence dashboard: FastAPI backend + React/Vite frontend. Live data comes from the Fyers API v3 via a user-supplied daily access token; all quant math (Black-Scholes, IV, Greeks, GEX, SVI) is implemented from scratch in pure Python — no numpy/scipy/quant libraries.
@@ -54,6 +61,8 @@ The Fyers access token is the backbone of every request:
 - `routers/` compose `fyers_client` fetches with the engines. `routers/chain.py` is the workhorse (fetch chain → solve IV per strike → Greeks); other routers reuse its helpers (e.g. `days_to_expiry`).
 - `snapshot_store.py` + `scheduler.py` — APScheduler cron writes daily ATM IV + spot to SQLite at 15:20 IST; this self-built history powers `/api/ivrank` (no broker provides historical IV).
 - `alert_engine/` is a self-contained package (own SQLite DB `oi_engine.db`, own models/db/engine modules) running as an asyncio background task, started/stopped via REST endpoints in `routers/alert_engine.py`. State lives in the `engine_state` singleton (`alert_engine/models.py`).
+- `market_hours.py` is the single source of truth for session timing, and is **CAS-aware** (see below). Never hardcode 15:30 as the close; use `get_session_phase()` / `is_derivatives_open()`.
+- `recorder/` captures full option chains to an **append-only** store (`market_data.db`) for signal research and backtesting. `ChainSnapshot` (`recorder/models.py`) is the contract between live capture and backtest replay — the recorder produces them, `store.iter_snapshots()` replays identical ones. **A signal that imports `fyers_client` is broken by construction.** The recorder auto-starts on successful `/api/auth/validate`. It never deletes: NSE intraday per-strike OI cannot be bought back retroactively.
 
 ### Frontend layering
 
@@ -72,6 +81,23 @@ The Fyers access token is the backbone of every request:
 - The Fyers app client ID is hardcoded in `fyers_client.py` (`FYERS_CLIENT_ID`); only the access token is user-supplied.
 - `POST /api/position-lab/calculate` is the only unauthenticated data endpoint — pure BS math, no Fyers call.
 - Frontend styling: light "Golden Hour" cream palette (`#FBF7F0` bg, teal `#0D9488` / red `#DC2626` accents, IBM Plex Mono) with a Plotly `LAYOUT_BASE` duplicated at the top of each page — there is no central theme file; copy from an existing page. (The README's "dark terminal" description is outdated.)
+
+## CAS — Closing Auction Session (live 3 Aug 2026)
+
+SEBI/NSE replaced VWAP closing-price discovery with a call auction for
+F&O-eligible **cash stocks**. Continuous cash trading now ends **15:15**, the
+auction runs to ~15:35, and **derivatives trade until ~15:40**. Index options
+aren't directly in CAS, but the official index close derives from constituent
+closes that now come from CAS. Consequences encoded in `market_hours.py`:
+
+- Anything polling the option chain must gate on `is_derivatives_open()` (to 15:40),
+  not the old 15:30 cutoff — `alert_engine.is_market_open()` is still stale here.
+- **`SNAPSHOT_TIME_IST = "15:20"` now fires inside the auction window**, so the
+  "closing spot" it captures for the 5 stock underlyings is a stale pre-auction
+  print, silently contaminating `spot_history` → realized vol → any VRP signal.
+  Guard closing-price capture with `is_cash_price_reliable()`.
+- Every recorded snapshot is tagged with `SessionPhase`; an unchanged LTP during
+  `CAS_WINDOW` is a frozen book, not a quiet market.
 
 ## Known quirks / tech debt
 
