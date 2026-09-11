@@ -8,11 +8,17 @@ Returns data for three frontend charts:
   3. Term structure  (ATM IV across expiries)
 
 Optional ?interpolate=true fills surface gaps using SVI parametric fitting.
+
+IVs are solved with Black-76 against a forward implied per expiry from the
+chain's own put-call parity, so a call/put IV gap at one strike is real skew
+rather than the dividend-yield artefact spot-based pricing produces.
 """
+import math
 from fastapi import APIRouter, Depends, HTTPException, Query
 from auth import get_token
+from chain_pricing import implied_forward_for_chain, price_for_iv
 from fyers_client import fetch_expiry_list, fetch_option_chain, fetch_quote, get_fyers
-from iv_engine import implied_volatility
+from iv_engine import implied_vol_forward
 from svi_engine import interpolate_surface
 from config import UNDERLYINGS, RISK_FREE_RATE
 from market_hours import time_to_expiry as days_to_expiry
@@ -62,15 +68,23 @@ def get_iv_surface(
 
         chain = fetch_option_chain(fyers, symbol, exp["expiry"], strike_count=16)
 
+        # One forward per expiry slice. Calls and puts at a strike then share it,
+        # so any residual call/put IV gap is genuine market skew rather than the
+        # dividend-yield artefact that spot-based pricing manufactures.
+        forward = implied_forward_for_chain(chain, T, spot)
+        if forward is None:
+            continue
+
         call_ivs: dict[float, float] = {}
         put_ivs:  dict[float, float] = {}
 
         for opt in chain:
-            if opt["ltp"] <= 0:
+            price = price_for_iv(opt)
+            if not price:
                 continue
-            iv = implied_volatility(
-                market_price=opt["ltp"],
-                S=spot,
+            iv = implied_vol_forward(
+                market_price=price,
+                F=forward,
                 K=opt["strike"],
                 T=T,
                 r=RISK_FREE_RATE,
@@ -105,6 +119,10 @@ def get_iv_surface(
                 "days_to_expiry": round(T * 365),
                 "strike":         strike,
                 "moneyness":      round(strike / spot, 4),
+                # Log-moneyness against the FORWARD is the correct x-axis for
+                # skew and the natural coordinate for SVI (which parameterises
+                # total variance in k = ln(K/F)).
+                "log_moneyness":  round(math.log(strike / forward), 6),
                 "call_iv":        call_iv,
                 "put_iv":         put_iv,
                 "mid_iv":         mid_iv,
@@ -119,6 +137,7 @@ def get_iv_surface(
                 "expiry_date":    exp["date"],
                 "days_to_expiry": round(T * 365),
                 "atm_iv":         atm_iv,
+                "forward":        round(forward, 2),
             })
 
         # ── Skew for this expiry ──

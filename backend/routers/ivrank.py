@@ -19,7 +19,8 @@ from fyers_client import (
     fetch_expiry_list, fetch_option_chain, fetch_quote,
     fetch_historical_prices, get_fyers,
 )
-from iv_engine import implied_volatility
+from chain_pricing import implied_forward_for_chain, price_for_iv
+from iv_engine import implied_vol_forward
 from snapshot_store import get_iv_rank, get_atm_iv_history
 from realized_vol import compute_realized_vol, compute_rv_series
 from config import UNDERLYINGS, RISK_FREE_RATE, DB_PATH
@@ -70,15 +71,20 @@ def get_iv_rank_endpoint(symbol: str, token: str = Depends(get_token)):
     chain = fetch_option_chain(fyers, symbol, exp["expiry"], strike_count=6)
 
     # ── ATM IV from live chain ────────────────────────────────────────────────
+    # Forward-based, matching /api/chain and /api/surface. This number feeds IV
+    # Rank and the vol-premium calculation, so a spot-based bias here would
+    # propagate straight into the VRP signal.
+    forward = implied_forward_for_chain(chain, T, spot)
     iv_values = []
     for opt in chain:
-        if opt["ltp"] <= 0:
+        price = price_for_iv(opt)
+        if not price or not forward:
             continue
         if abs(opt["strike"] - spot) / spot > 0.02:
             continue
-        iv = implied_volatility(
-            market_price=opt["ltp"],
-            S=spot, K=opt["strike"], T=T,
+        iv = implied_vol_forward(
+            market_price=price,
+            F=forward, K=opt["strike"], T=T,
             r=RISK_FREE_RATE,
             option_type=opt["option_type"],
         )

@@ -2,12 +2,19 @@
 """
 GET /api/chain/{symbol}?expiry_epoch=<int>&expiry_date=<DD-MM-YYYY>
 Fetches live option chain for one expiry, enriched with IV and Greeks.
-IV is calculated via Newton-Raphson on Black-Scholes (not from Fyers).
+
+IV is solved by us, not supplied by Fyers. Pricing is Black-76 off the forward
+implied by the chain's own put-call parity, so calls and puts at one strike
+share a single forward and their IVs agree. Pricing off spot instead inflates
+call IVs and deflates put IVs by roughly the dividend yield, which shows up as
+fake skew on the surface chart.
 """
 from fastapi import APIRouter, Depends, Query, HTTPException
 from auth import get_token
+from chain_pricing import implied_forward_for_chain, price_for_iv
+from forward_engine import forward_basis_pct, implied_dividend_yield
 from fyers_client import fetch_quote, fetch_option_chain, get_fyers
-from iv_engine import implied_volatility, greeks
+from iv_engine import black76_greeks, implied_vol_forward
 from config import UNDERLYINGS, RISK_FREE_RATE
 
 # Time-to-expiry lives in market_hours (the session-timing single source of
@@ -48,22 +55,26 @@ def get_chain(
         key=lambda k: abs(k - spot)
     )
 
+    forward = implied_forward_for_chain(chain, T, spot)
+
     enriched = []
     for opt in chain:
         iv = None
         g  = {}
 
-        if opt["ltp"] > 0 and T > 0:
-            iv = implied_volatility(
-                market_price=opt["ltp"],
-                S=spot,
+        price = price_for_iv(opt)
+        if price and T > 0 and forward:
+            iv = implied_vol_forward(
+                market_price=price,
+                F=forward,
                 K=opt["strike"],
                 T=T,
                 r=RISK_FREE_RATE,
                 option_type=opt["option_type"],
             )
             if iv is not None:
-                g = greeks(spot, opt["strike"], T, RISK_FREE_RATE, iv, opt["option_type"])
+                g = black76_greeks(forward, opt["strike"], T, RISK_FREE_RATE,
+                                   iv, opt["option_type"], spot=spot)
 
         enriched.append({
             **opt,
@@ -81,6 +92,12 @@ def get_chain(
     return {
         "symbol":       symbol,
         "spot":         spot,
+        "forward":      round(forward, 2) if forward else None,
+        "basis_pct":    round(forward_basis_pct(forward, spot), 4) if forward else None,
+        "implied_div_yield": (
+            round(implied_dividend_yield(forward, spot, T, RISK_FREE_RATE) * 100, 3)
+            if forward and T > 0 else None
+        ),
         "expiry_date":  expiry_date,
         "atm_strike":   atm_strike,
         "T":            round(T, 6),

@@ -11,8 +11,9 @@ Uses callOi / putOi from Fyers top-level response as aggregate totals.
 """
 from fastapi import APIRouter, Depends, Query, HTTPException
 from auth import get_token
+from chain_pricing import implied_forward_for_chain, price_for_iv
 from fyers_client import fetch_option_chain, fetch_quote, get_fyers
-from iv_engine import implied_volatility, greeks
+from iv_engine import black76_greeks, implied_vol_forward
 from gex_engine import compute_net_gex_profile
 from config import UNDERLYINGS, RISK_FREE_RATE
 from market_hours import time_to_expiry as days_to_expiry
@@ -85,6 +86,9 @@ def get_oi_analysis(
     # ── Max Pain ──
     max_pain = compute_max_pain(chain)
 
+    # One forward per expiry, shared by every strike's gamma calculation.
+    forward = implied_forward_for_chain(chain, T, spot)
+
     # ── Per-strike OI table + GEX inputs ──
     by_strike: dict[float, dict] = {}
     gex_inputs: list[dict] = []
@@ -114,26 +118,24 @@ def get_oi_analysis(
         # Compute gamma for GEX
         # Use mid-price (bid+ask average) when available — more stable for IV solving
         # than LTP which can be stale. Fall back to LTP if bid/ask not available.
+        # Gamma for GEX. Solved off the same implied forward the rest of the app
+        # uses, so a strike's gamma here matches its gamma in /api/chain.
+        # T is measured to the real 15:30 IST expiry instant; the old
+        # `max(T, 1/365)` floor is gone — with two hours left it inflated T
+        # ~12x and badly understated IV.
         gamma = 0.0
-        bid = opt.get("bid", 0)
-        ask = opt.get("ask", 0)
-        mid = (bid + ask) / 2.0 if bid > 0 and ask > 0 else opt["ltp"]
-        price_for_iv = mid if mid > 0 else opt["ltp"]
+        price = price_for_iv(opt)
 
-        # T is now measured to the real 15:30 IST expiry instant, so the old
-        # `max(T, 1/365)` floor is not just unnecessary but harmful: with two
-        # hours left it would inflate T by ~12x and badly understate IV.
-        T_for_iv = T
-
-        if price_for_iv > 0 and T_for_iv > 0:
-            iv = implied_volatility(
-                market_price=price_for_iv,
-                S=spot, K=s, T=T_for_iv,
+        if price and T > 0 and forward:
+            iv = implied_vol_forward(
+                market_price=price,
+                F=forward, K=s, T=T,
                 r=RISK_FREE_RATE,
                 option_type=opt["option_type"],
             )
             if iv is not None:
-                g = greeks(spot, s, T_for_iv, RISK_FREE_RATE, iv, opt["option_type"])
+                g = black76_greeks(forward, s, T, RISK_FREE_RATE,
+                                   iv, opt["option_type"], spot=spot)
                 gamma = g.get("gamma", 0.0)
 
         gex_inputs.append({
@@ -149,6 +151,7 @@ def get_oi_analysis(
     return {
         "symbol":        symbol,
         "spot":          spot,
+        "forward":       round(forward, 2) if forward else None,
         "expiry_date":   expiry_date,
         "pcr":           pcr,
         "max_pain":      max_pain,

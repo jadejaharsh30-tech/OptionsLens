@@ -13,7 +13,8 @@ from datetime import date
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from fyers_client import fetch_expiry_list, fetch_option_chain, fetch_quote, get_fyers
-from iv_engine import implied_volatility
+from chain_pricing import implied_forward_for_chain, price_for_iv
+from iv_engine import implied_vol_forward
 from snapshot_store import init_db, write_iv_snapshot, write_atm_iv, write_spot_price
 from config import UNDERLYINGS, RISK_FREE_RATE, DB_PATH
 
@@ -72,13 +73,22 @@ async def run_daily_snapshot():
             T     = days_to_expiry(exp["date"])
             chain = fetch_option_chain(fyers, symbol_key, exp["expiry"], strike_count=10)
 
+            # Forward-based, matching the live endpoints. IV Rank compares
+            # today's IV against this stored history, so the two must be
+            # computed the same way or the rank is meaningless.
+            forward = implied_forward_for_chain(chain, T, spot)
+            if forward is None:
+                logger.warning(f"No implied forward for {symbol_key} — skipping.")
+                continue
+
             atm_iv_values = []
             for opt in chain:
-                if opt["ltp"] <= 0:
+                price = price_for_iv(opt)
+                if not price:
                     continue
-                iv = implied_volatility(
-                    market_price=opt["ltp"],
-                    S=spot, K=opt["strike"], T=T,
+                iv = implied_vol_forward(
+                    market_price=price,
+                    F=forward, K=opt["strike"], T=T,
                     r=RISK_FREE_RATE,
                     option_type=opt["option_type"],
                 )

@@ -79,9 +79,9 @@ differentiator. This is another reason the recorder is urgent.
 - [x] 1. CAS-aware market session module (`market_hours.py`) — session phases, correct close times
 - [x] 2. Fix event-loop blocking: `run_symbol_tick` must run via `asyncio.to_thread` (`alert_engine/engine.py`)
 - [x] 3. Fractional time-to-expiry to the real expiry timestamp (fixes `T=0` killing IV/Greeks on expiry day)
-- [ ] 4. Forward-based pricing — Black-76 off futures, or imply forward from ATM put-call parity (removes systematic call/put IV bias)
+- [x] 4. Forward-based pricing — Black-76 against a forward implied from the chain's own ATM put-call parity (VIX-style min|C−P| rule). Removed a ~1 vol-point call/put IV gap that varied by strike and was being read as skew
 - [ ] 5. IV solver robustness — Newton-Raphson with bisection/Brent fallback (stops wings vanishing)
-- [ ] 6. Unify IV pricing inputs across routers — `oi.py` solves from bid/ask mid, `chain.py`/`surface.py`/`ivrank.py` from raw LTP, so the same strike can report different IVs per endpoint. Mid is the better input; fold it into a shared helper (the `max(T, 1/365)` floor is already gone, removed with item 3)
+- [x] 6. Unify IV pricing inputs — `chain_pricing.price_for_iv()` (mid, falling back to LTP) is now the single definition used by chain, surface, oi, ivrank and the daily snapshot job
 - [ ] 7. Honour `DB_PATH` env var so Docker persistence actually works
 
 ### Phase 1 — Data capture (URGENT — every day missed is unrecoverable)
@@ -159,6 +159,15 @@ differentiator. This is another reason the recorder is urgent.
 
 Append one line per session. Keep it terse.
 
+- **2026-09-11 (3)** — Items 4 and 6. All IV is now Black-76 against a forward
+  implied per expiry from the chain's own put-call parity. Measured on NIFTY-like
+  inputs (1.3% dividend yield, 30d, true vol 15%), the old spot-based model
+  reported call IV 14.16–14.64% against put IV 15.31–15.62% — a ~1 vol-point gap
+  that varied by strike and was indistinguishable from skew on the chart. It is
+  now zero to solver tolerance. `chain_pricing.py` gives chain/surface/oi/ivrank
+  and the snapshot job one shared definition of the IV input price (mid, falling
+  back to LTP). Also raised gamma's stored precision: at 6 dp, far-OTM gamma
+  rounded to zero and dropped out of GEX entirely. 94 tests pass.
 - **2026-09-11 (2)** — Phase 0 correctness pass. Items 2–3 done. `run_symbol_tick`
   now runs via `asyncio.to_thread` (it was stalling the whole API on every poll).
   `days_to_expiry` moved into `market_hours` as `time_to_expiry`, measured to the
@@ -175,6 +184,12 @@ Append one line per session. Keep it terse.
 ---
 
 ## Open questions / decisions to revisit
+
+- **IV history discontinuity.** `atm_iv_history` rows written before 2026-09-11
+  were computed spot-based and sit ~1 vol point below forward-based values, so
+  IV Rank spanning that boundary is slightly distorted. `iv_snapshots` keeps
+  per-strike `ltp`, so a one-off rebuild is possible; otherwise accept the seam
+  and note it. Matters for item 30 (VRP).
 
 - **Exact CAS window end (15:30 vs 15:35)** — confirm against the NSE circular.
 - **Index options settlement under CAS** — index options aren't directly in CAS,
