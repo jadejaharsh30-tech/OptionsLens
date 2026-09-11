@@ -74,6 +74,7 @@ The Fyers access token is the backbone of every request:
 ## Conventions and gotchas
 
 - **Fyers expiry dates are DD-MM-YYYY** (e.g. `"24-04-2025"`); all date parsing uses `"%d-%m-%Y"`. Do not assume ISO format on anything coming from Fyers.
+- **Time to expiry comes from `market_hours.time_to_expiry()`** — fractional, measured to the real 15:30 IST expiry instant, IST-aware. Never reintroduce whole-day `(expiry - today).days`: that returns 0.0 across all of expiry day, which silently disables IV and Greeks everywhere, and `date.today()` is the wrong calendar day on a UTC host. `days_to_expiry` is a deprecated alias.
 - IV solver returns `None` for illiquid strikes (Vega → 0) rather than raising; downstream code must handle `None` IVs.
 - Option types are the NSE strings `"CE"` / `"PE"` throughout, not call/put booleans.
 - Unit conventions: engines work in decimals (IV 0.14), the API boundary returns percentages (14.0) — routers do the ×100. `greeks()` returns Vega/Rho per 1% move and Theta per calendar day; `bs_vega()` is per-unit (used by the solver).
@@ -103,7 +104,7 @@ closes that now come from CAS. Consequences encoded in `market_hours.py`:
 
 - **`DB_PATH` env var is dead**: `docker-compose.yml` sets `DB_PATH` and mounts `./data`, but `config.py` hardcodes `DB_PATH = "optionslens.db"` and no backend code reads env vars — SQLite data does not actually persist across Docker rebuilds. Fixing persistence means making `config.py` read the env var.
 - `IV_SOLVER_*` constants in `config.py` are never imported; the real defaults are duplicated in `implied_volatility()`'s signature.
-- `routers/oi.py` solves IV from bid/ask mid with a 1-day floor on T; `chain.py`/`surface.py`/`ivrank.py` use raw LTP with no floor — same strike can show slightly different IVs across endpoints. Prefer the oi.py approach for new code.
+- `routers/oi.py` solves IV from bid/ask mid; `chain.py`/`surface.py`/`ivrank.py` use raw LTP — the same strike can report slightly different IVs across endpoints. Mid is the better input (LTP goes stale on illiquid strikes); unifying this is roadmap item 6.
 - In-memory-only state lost on restart: the snapshot token (`scheduler.py`) and the alert-engine asyncio task handle. A restart before 15:20 IST silently skips that day's IV snapshot.
 - `fetch_historical_prices` (fyers_client.py) has a dead, broken epoch computation immediately overwritten by the correct one.
 - Alert-engine comments reference `app_v2_final.py` (the original Streamlit app it was ported from) — that file is not in the repo.

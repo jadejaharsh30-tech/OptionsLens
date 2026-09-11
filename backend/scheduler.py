@@ -63,7 +63,7 @@ async def run_daily_snapshot():
             write_spot_price(DB_PATH, today, symbol_key, spot)
 
             # Use nearest non-expired expiry
-            from routers.chain import days_to_expiry
+            from market_hours import time_to_expiry as days_to_expiry
             exp = next((e for e in expiries if days_to_expiry(e["date"]) > 0), None)
             if exp is None:
                 logger.warning(f"All expiries past for {symbol_key}, skipping.")

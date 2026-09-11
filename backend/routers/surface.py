@@ -15,7 +15,7 @@ from fyers_client import fetch_expiry_list, fetch_option_chain, fetch_quote, get
 from iv_engine import implied_volatility
 from svi_engine import interpolate_surface
 from config import UNDERLYINGS, RISK_FREE_RATE
-from routers.chain import days_to_expiry
+from market_hours import time_to_expiry as days_to_expiry
 
 router = APIRouter(prefix="/api/surface", tags=["surface"])
 

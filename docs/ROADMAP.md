@@ -77,11 +77,11 @@ differentiator. This is another reason the recorder is urgent.
 ### Phase 0 — Foundations & correctness (blocks everything else)
 
 - [x] 1. CAS-aware market session module (`market_hours.py`) — session phases, correct close times
-- [ ] 2. Fix event-loop blocking: `run_symbol_tick` must run via `asyncio.to_thread` (`alert_engine/engine.py:406`)
-- [ ] 3. Fractional time-to-expiry to the real expiry timestamp (fixes `T=0` killing IV/Greeks on expiry day)
+- [x] 2. Fix event-loop blocking: `run_symbol_tick` must run via `asyncio.to_thread` (`alert_engine/engine.py`)
+- [x] 3. Fractional time-to-expiry to the real expiry timestamp (fixes `T=0` killing IV/Greeks on expiry day)
 - [ ] 4. Forward-based pricing — Black-76 off futures, or imply forward from ATM put-call parity (removes systematic call/put IV bias)
 - [ ] 5. IV solver robustness — Newton-Raphson with bisection/Brent fallback (stops wings vanishing)
-- [ ] 6. Unify IV pricing inputs across routers (mid vs LTP inconsistency between `oi.py` and the rest)
+- [ ] 6. Unify IV pricing inputs across routers — `oi.py` solves from bid/ask mid, `chain.py`/`surface.py`/`ivrank.py` from raw LTP, so the same strike can report different IVs per endpoint. Mid is the better input; fold it into a shared helper (the `max(T, 1/365)` floor is already gone, removed with item 3)
 - [ ] 7. Honour `DB_PATH` env var so Docker persistence actually works
 
 ### Phase 1 — Data capture (URGENT — every day missed is unrecoverable)
@@ -159,6 +159,13 @@ differentiator. This is another reason the recorder is urgent.
 
 Append one line per session. Keep it terse.
 
+- **2026-09-11 (2)** — Phase 0 correctness pass. Items 2–3 done. `run_symbol_tick`
+  now runs via `asyncio.to_thread` (it was stalling the whole API on every poll).
+  `days_to_expiry` moved into `market_hours` as `time_to_expiry`, measured to the
+  real 15:30 IST expiry instant with IST-aware `now` — 0DTE IV/Greeks work for the
+  first time, and the UTC-host date bug is gone. Removed `oi.py`'s now-harmful
+  `max(T, 1/365)` floor. All call sites repointed at `market_hours`, which also
+  removes `alert_engine` importing from `routers`. 72 tests pass.
 - **2026-09-11** — Roadmap created. Built `market_hours.py` (CAS-aware session phases),
   `recorder/` package (ChainSnapshot, append-only store, async service), recorder
   control API, auto-start on token validation. Items 1, 8–13 done.

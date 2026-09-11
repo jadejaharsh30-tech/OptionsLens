@@ -15,7 +15,7 @@ from fyers_client import fetch_option_chain, fetch_quote, get_fyers
 from iv_engine import implied_volatility, greeks
 from gex_engine import compute_net_gex_profile
 from config import UNDERLYINGS, RISK_FREE_RATE
-from routers.chain import days_to_expiry
+from market_hours import time_to_expiry as days_to_expiry
 
 router = APIRouter(prefix="/api/oi", tags=["oi"])
 
@@ -120,10 +120,12 @@ def get_oi_analysis(
         mid = (bid + ask) / 2.0 if bid > 0 and ask > 0 else opt["ltp"]
         price_for_iv = mid if mid > 0 else opt["ltp"]
 
-        # Use a minimum T of 1 day to prevent IV solver failure on expiry day
-        T_for_iv = max(T, 1/365)
+        # T is now measured to the real 15:30 IST expiry instant, so the old
+        # `max(T, 1/365)` floor is not just unnecessary but harmful: with two
+        # hours left it would inflate T by ~12x and badly understate IV.
+        T_for_iv = T
 
-        if price_for_iv > 0:
+        if price_for_iv > 0 and T_for_iv > 0:
             iv = implied_volatility(
                 market_price=price_for_iv,
                 S=spot, K=s, T=T_for_iv,

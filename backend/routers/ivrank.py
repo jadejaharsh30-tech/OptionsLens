@@ -23,7 +23,7 @@ from iv_engine import implied_volatility
 from snapshot_store import get_iv_rank, get_atm_iv_history
 from realized_vol import compute_realized_vol, compute_rv_series
 from config import UNDERLYINGS, RISK_FREE_RATE, DB_PATH
-from routers.chain import days_to_expiry
+from market_hours import time_to_expiry as days_to_expiry
 
 router = APIRouter(prefix="/api/ivrank", tags=["ivrank"])
 

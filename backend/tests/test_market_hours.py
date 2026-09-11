@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from market_hours import (  # noqa: E402
     IST, SessionPhase, get_session_phase, is_cash_price_reliable,
     is_continuous_session, is_derivatives_open, is_recording_window,
-    is_trading_day, seconds_until_next_tick,
+    is_trading_day, seconds_until_next_tick, time_to_expiry,
 )
 
 
@@ -65,6 +65,45 @@ def test_weekend_is_not_a_trading_day():
     assert is_trading_day(at(*FRIDAY, 12, 0).date())
     assert not is_trading_day(at(2026, 9, 12, 12, 0).date())
     assert get_session_phase(at(2026, 9, 12, 12, 0)) is SessionPhase.CLOSED
+
+
+# ── time_to_expiry ────────────────────────────────────────────────────────────
+# The old whole-day version returned exactly 0.0 for the whole of expiry day,
+# which disabled IV and Greeks across the app on the day they matter most.
+
+def test_expiry_day_still_has_time_value_before_1530():
+    """The regression that killed 0DTE: T must be > 0 during expiry day."""
+    t = time_to_expiry("11-09-2026", at(*FRIDAY, 10, 0))
+    assert t > 0
+    # 5.5 hours to 15:30, in years.
+    assert abs(t - 5.5 / (365 * 24)) < 1e-9
+
+
+def test_expiry_day_shrinks_monotonically_through_the_session():
+    morning   = time_to_expiry("11-09-2026", at(*FRIDAY, 10, 0))
+    afternoon = time_to_expiry("11-09-2026", at(*FRIDAY, 14, 0))
+    assert morning > afternoon > 0
+
+
+def test_expired_after_1530_on_expiry_day():
+    assert time_to_expiry("11-09-2026", at(*FRIDAY, 15, 31)) == 0.0
+    assert time_to_expiry("10-09-2026", at(*FRIDAY, 10, 0)) == 0.0
+
+
+def test_sub_minute_remainder_counts_as_expired():
+    """Near-zero T only produces solver noise, never tradeable time value."""
+    assert time_to_expiry("11-09-2026", at(*FRIDAY, 15, 29)) == 0.0
+
+
+def test_future_expiry_is_roughly_calendar_days():
+    # 11-09 10:00 → 17-09 15:30 is 6 days plus 5.5 hours.
+    t = time_to_expiry("17-09-2026", at(*FRIDAY, 10, 0))
+    assert 6.0 / 365 < t < 7.0 / 365
+    assert abs(t - (6 + 5.5 / 24) / 365) < 1e-9
+
+
+def test_alternate_fyers_date_format_is_accepted():
+    assert time_to_expiry("17-Sep-2026", at(*FRIDAY, 10, 0)) > 0
 
 
 def test_tick_alignment_lands_on_interval_boundaries():

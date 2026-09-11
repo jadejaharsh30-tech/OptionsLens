@@ -37,7 +37,7 @@ from alert_engine.percentile_threshold import get_adaptive_threshold
 from alert_engine.models import ALERT_ENGINE_DB
 from config import UNDERLYINGS
 from fyers_client import get_fyers, fetch_quote, fetch_expiry_list, fetch_option_chain
-from routers.chain import days_to_expiry
+from market_hours import is_derivatives_open, time_to_expiry as days_to_expiry
 
 logger = logging.getLogger(__name__)
 
@@ -144,17 +144,15 @@ def score_confidence(oi_pct: float, oi_speed: float, volume: float) -> str:
 
 
 def is_market_open() -> bool:
-    """True between 09:15 and 15:30 IST on weekdays."""
-    try:
-        from zoneinfo import ZoneInfo
-    except ImportError:
-        from backports.zoneinfo import ZoneInfo
-    now = datetime.now(ZoneInfo("Asia/Kolkata"))
-    if now.weekday() >= 5:
-        return False
-    open_t  = now.replace(hour=9,  minute=15, second=0, microsecond=0)
-    close_t = now.replace(hour=15, minute=30, second=0, microsecond=0)
-    return open_t <= now <= close_t
+    """
+    True while options can still trade.
+
+    Delegates to `market_hours` rather than hardcoding 09:15-15:30. Under CAS
+    (live 3 Aug 2026) derivatives trade until ~15:40, so the old 15:30 cutoff
+    blinded the engine to the final ten minutes of the session — precisely when
+    hedging flow around the closing auction shows up.
+    """
+    return is_derivatives_open()
 
 
 # ── Per-symbol engine tick ─────────────────────────────────────────────────────
@@ -403,7 +401,15 @@ async def engine_task(token: str, cfg: EngineConfig):
                 if not engine_state.running:
                     break
                 try:
-                    run_symbol_tick(fyers, symbol, session_date, cfg, engine_state)
+                    # run_symbol_tick is synchronous and makes blocking Fyers
+                    # HTTP calls plus blocking SQLite writes. Calling it
+                    # directly on the event loop stalled every other API
+                    # request for the duration of each poll — with two symbols
+                    # that is ~6 blocking round-trips every 10 seconds, which
+                    # made the whole dashboard hang whenever the engine ran.
+                    await asyncio.to_thread(
+                        run_symbol_tick, fyers, symbol, session_date, cfg, engine_state
+                    )
                 except Exception as sym_err:
                     logger.error(f"Tick error [{symbol}]: {repr(sym_err)}")
 

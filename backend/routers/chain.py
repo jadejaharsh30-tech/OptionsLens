@@ -5,28 +5,17 @@ Fetches live option chain for one expiry, enriched with IV and Greeks.
 IV is calculated via Newton-Raphson on Black-Scholes (not from Fyers).
 """
 from fastapi import APIRouter, Depends, Query, HTTPException
-from datetime import date, datetime
 from auth import get_token
 from fyers_client import fetch_quote, fetch_option_chain, get_fyers
 from iv_engine import implied_volatility, greeks
 from config import UNDERLYINGS, RISK_FREE_RATE
 
+# Time-to-expiry lives in market_hours (the session-timing single source of
+# truth). Re-exported here because several modules still import it from this
+# router; prefer importing from market_hours directly in new code.
+from market_hours import days_to_expiry, time_to_expiry  # noqa: F401
+
 router = APIRouter(prefix="/api/chain", tags=["chain"])
-
-
-def days_to_expiry(expiry_date_str: str) -> float:
-    """
-    Parse Fyers date string (DD-MM-YYYY, e.g. '24-04-2025') → years to expiry.
-    Returns 0.0 if expiry is today or in the past.
-    """
-    try:
-        expiry = datetime.strptime(expiry_date_str, "%d-%m-%Y").date()
-    except ValueError:
-        # Fallback: try alternate format just in case
-        expiry = datetime.strptime(expiry_date_str, "%d-%b-%Y").date()
-    today = date.today()
-    days  = max((expiry - today).days, 0)
-    return days / 365.0
 
 
 @router.get("/{symbol}")

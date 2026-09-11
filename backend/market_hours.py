@@ -36,6 +36,13 @@ CONTINUOUS_CASH_CLOSE = time(15, 15)   # CAS: cash trading stops here for F&O st
 CAS_WINDOW_END        = time(15, 35)   # auction equilibrium price finalised
 DERIVATIVES_CLOSE     = time(15, 40)   # options/futures stop trading
 
+# The moment an expiring contract stops having time value. Index options have
+# conventionally expired at 15:30 IST; CAS did not move this, but confirm
+# against the NSE circular if settlement timing is ever material to a signal.
+EXPIRY_TIME_IST = time(15, 30)
+
+SECONDS_PER_YEAR = 365.0 * 24 * 3600
+
 # Exchange holidays (YYYY-MM-DD). Extend as needed — weekends are handled
 # automatically. An incomplete list only costs us empty polls, never bad data.
 NSE_HOLIDAYS: set[str] = set()
@@ -130,6 +137,50 @@ def is_cash_price_reliable(now: Optional[datetime] = None) -> bool:
     at 15:20 IST currently violates it.
     """
     return get_session_phase(now) not in (SessionPhase.CAS_WINDOW, SessionPhase.CLOSED)
+
+
+def time_to_expiry(expiry_date_str: str, now: Optional[datetime] = None) -> float:
+    """
+    Years to expiry, measured to the actual expiry instant (15:30 IST).
+
+    Replaces the old whole-day `days_to_expiry`, which computed
+    `(expiry - today).days / 365` and therefore returned exactly 0.0 all through
+    expiry day. That single value silently disabled the tool when it mattered
+    most: `chain.py` skipped IV and Greeks for the entire chain, `surface.py`
+    dropped the expiry, and `ivrank.py` quietly rolled to the next expiry.
+    0DTE gamma — the most interesting case for the GEX module — was unreachable.
+
+    Also fixes a latent timezone bug: the old version used `date.today()`, which
+    is the server's local date. On a UTC host (any Docker deploy) that is the
+    wrong calendar day for an IST market during the evening.
+
+    Args:
+        expiry_date_str: Fyers expiry string, DD-MM-YYYY (e.g. "17-09-2026").
+        now: override for testing; defaults to current IST time.
+
+    Returns:
+        Time to expiry in years, or 0.0 once expired. Sub-minute remainders are
+        treated as expired — there is no tradeable time value left, and feeding
+        a near-zero T into the Black-Scholes solver only produces noise.
+    """
+    try:
+        expiry_day = datetime.strptime(expiry_date_str, "%d-%m-%Y").date()
+    except ValueError:
+        # Fyers has been seen returning DD-Mon-YYYY on some instruments.
+        expiry_day = datetime.strptime(expiry_date_str, "%d-%b-%Y").date()
+
+    expiry_dt = datetime.combine(expiry_day, EXPIRY_TIME_IST, tzinfo=IST)
+    now = now or now_ist()
+
+    remaining = (expiry_dt - now).total_seconds()
+    if remaining <= 60:
+        return 0.0
+    return remaining / SECONDS_PER_YEAR
+
+
+def days_to_expiry(expiry_date_str: str, now: Optional[datetime] = None) -> float:
+    """Deprecated alias for `time_to_expiry`, kept for existing call sites."""
+    return time_to_expiry(expiry_date_str, now)
 
 
 def seconds_until_next_tick(interval_sec: int, now: Optional[datetime] = None) -> float:
