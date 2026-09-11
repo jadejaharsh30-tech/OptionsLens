@@ -117,7 +117,12 @@ differentiator. This is another reason the recorder is urgent.
 
 ### Phase 4 — Signals with actual edge (ranked by readiness)
 
-- [ ] 30. **VRP signal** — IV−RV percentile rank. Backtestable *today* on existing daily snapshots
+- [ ] 30. **VRP signal** — IV−RV percentile rank. NOTE (corrected 2026-09-11): a VRP
+  *reading* is available today (RV comes from Fyers history, IV from the live chain),
+  but the *signal* is the percentile rank of that spread against its own history,
+  and `atm_iv_history` only builds one row per trading day from the day we started
+  running. So this needs ~30 sessions of accumulation before it can be evaluated —
+  it is not testable today as originally written
 - [ ] 31. **GEX regime** — zero-gamma flip level; momentum when net GEX < 0, mean-reversion when > 0
 - [ ] 32. **Signed aggressor flow** — Lee-Ready style classification from bid/ask, replacing raw OI%
 - [ ] 33. **Term structure & skew** — front/back inversion, 25-delta risk reversal percentile

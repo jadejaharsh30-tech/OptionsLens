@@ -26,7 +26,7 @@ python -m pytest tests/test_iv_engine.py             # one file
 python -m pytest tests/test_iv_engine.py -k parity   # one test by keyword
 ```
 
-Tests cover only the pure-Python engines (`iv_engine`, `gex_engine`, `svi_engine`, `realized_vol`, `snapshot_store`, `alert_engine/percentile_threshold`) and need no Fyers token or network. Routers and `fyers_client` are untested — exercising them requires a live token.
+106 tests, all pure-Python and needing no Fyers token or network: `iv_engine` (pricing + solver), `forward_engine`/`chain_pricing`, `market_hours`, `recorder/store`, `gex_engine`, `svi_engine`, `realized_vol`, `snapshot_store`, `alert_engine/percentile_threshold`. Routers and `fyers_client` are untested — that's roadmap item 54.
 
 ### Frontend (run from `frontend/`)
 
@@ -59,7 +59,7 @@ The Fyers access token is the backbone of every request:
 - `config.py` — single source of truth: `UNDERLYINGS` (Fyers symbol strings, lot sizes, strike steps), `RISK_FREE_RATE`, IV solver params, `DB_PATH`.
 - Pure-math engines (`iv_engine.py`, `gex_engine.py`, `svi_engine.py`, `realized_vol.py`, `forward_engine.py`) take plain floats/lists and know nothing about Fyers or FastAPI. Keep them dependency-free — this is what makes them unit-testable.
 - **All IV is Black-76 against an implied forward, never spot.** `chain_pricing.py` is the shared glue: `implied_forward_for_chain()` recovers the forward from the chain's own put-call parity (VIX-style min |C−P| strike), and `price_for_iv()` defines the input price (bid-ask mid, falling back to LTP). chain, surface, oi, ivrank and `scheduler.py` all go through it. Do not reintroduce `implied_volatility(S=spot, ...)` in a router: pricing off spot inflates call IVs and deflates put IVs by roughly the dividend yield (~1 vol point on NIFTY), which shows up as fake skew and breaks put-call parity in our own numbers.
-- `routers/` compose `fyers_client` fetches with the engines. `routers/chain.py` is the workhorse (fetch chain → solve IV per strike → Greeks); other routers reuse its helpers (e.g. `days_to_expiry`).
+- `routers/` compose `fyers_client` fetches with the engines. `routers/chain.py` is the workhorse (fetch chain → imply forward → solve IV per strike → Greeks). Shared helpers live outside `routers/` (`market_hours`, `chain_pricing`) so nothing imports across the router layer.
 - `snapshot_store.py` + `scheduler.py` — APScheduler cron writes daily ATM IV + spot to SQLite at 15:20 IST; this self-built history powers `/api/ivrank` (no broker provides historical IV).
 - `alert_engine/` is a self-contained package (own SQLite DB `oi_engine.db`, own models/db/engine modules) running as an asyncio background task, started/stopped via REST endpoints in `routers/alert_engine.py`. State lives in the `engine_state` singleton (`alert_engine/models.py`).
 - `market_hours.py` is the single source of truth for session timing, and is **CAS-aware** (see below). Never hardcode 15:30 as the close; use `get_session_phase()` / `is_derivatives_open()`.
@@ -93,7 +93,7 @@ aren't directly in CAS, but the official index close derives from constituent
 closes that now come from CAS. Consequences encoded in `market_hours.py`:
 
 - Anything polling the option chain must gate on `is_derivatives_open()` (to 15:40),
-  not the old 15:30 cutoff — `alert_engine.is_market_open()` is still stale here.
+  not a 15:30 cutoff. `alert_engine.is_market_open()` now delegates here.
 - **`SNAPSHOT_TIME_IST = "15:20"` now fires inside the auction window**, so the
   "closing spot" it captures for the 5 stock underlyings is a stale pre-auction
   print, silently contaminating `spot_history` → realized vol → any VRP signal.
@@ -104,8 +104,7 @@ closes that now come from CAS. Consequences encoded in `market_hours.py`:
 ## Known quirks / tech debt
 
 - `IV_SOLVER_*` constants in `config.py` are never imported; the real defaults live in `iv_engine.py` (`IV_LOWER_BOUND`, `IV_UPPER_BOUND`, `MIN_VEGA`, `BISECTION_MAX_ITER`).
-- `routers/oi.py` solves IV from bid/ask mid; `chain.py`/`surface.py`/`ivrank.py` use raw LTP — the same strike can report slightly different IVs across endpoints. Mid is the better input (LTP goes stale on illiquid strikes); unifying this is roadmap item 6.
-- In-memory-only state lost on restart: the snapshot token (`scheduler.py`) and the alert-engine asyncio task handle. A restart before 15:20 IST silently skips that day's IV snapshot.
+- In-memory-only state lost on restart: the snapshot token (`scheduler.py`), the alert-engine task handle, and the recorder task handle. A restart mid-session stops recording until the token is validated again.
 - `fetch_historical_prices` (fyers_client.py) has a dead, broken epoch computation immediately overwritten by the correct one.
 - Alert-engine comments reference `app_v2_final.py` (the original Streamlit app it was ported from) — that file is not in the repo.
-- README drift: it describes 3 modules (the Alert Engine page/package, SVI interpolation, realized vol, max pain, PCR are missing), says "36 unit tests" (now 52), uses `cd optionslens/backend` paths (actual: `backend/` at repo root), and references a `fyers_login_test.py` that isn't committed.
+- README drift: it describes 3 modules (the Alert Engine page/package, SVI interpolation, realized vol, max pain, PCR are missing), says "36 unit tests" (now 106), uses `cd optionslens/backend` paths (actual: `backend/` at repo root), and references a `fyers_login_test.py` that isn't committed.
