@@ -21,6 +21,7 @@ from pydantic import BaseModel
 
 from auth import get_token
 from market_hours import get_session_phase, now_ist
+from recorder.quality import day_coverage, quality_report
 from recorder.service import RecorderConfig, recorder_state, recorder_task
 from recorder.store import coverage_stats, recorded_dates
 
@@ -131,3 +132,22 @@ def dates(symbol: Optional[str] = None, token: str = Depends(get_token)):
     """Session dates available for replay/backtesting."""
     d = recorded_dates(symbol)
     return {"symbol": symbol, "count": len(d), "dates": d}
+
+
+@router.get("/quality")
+def quality(symbols: Optional[str] = None, interval_sec: int = 60,
+            token: str = Depends(get_token)):
+    """
+    Data-quality report: completeness per session, gaps, missing trading days.
+
+    `symbols` is an optional comma-separated filter.
+    """
+    symbol_list = [s.strip().upper() for s in symbols.split(",")] if symbols else None
+    return quality_report(symbol_list, interval_sec)
+
+
+@router.get("/quality/{symbol}/{session_date}")
+def quality_day(symbol: str, session_date: str, interval_sec: int = 60,
+                token: str = Depends(get_token)):
+    """Coverage detail for one symbol-day, including every gap found."""
+    return day_coverage(symbol.upper(), session_date, interval_sec)

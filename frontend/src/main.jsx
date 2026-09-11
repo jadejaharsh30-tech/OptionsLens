@@ -7,6 +7,7 @@ import MarketStructure from './pages/MarketStructure'
 import SmartMoney from './pages/SmartMoney'
 import PositionLab from './pages/PositionLab'
 import AlertEngine from './pages/AlertEngine'
+import Research from './pages/Research'
 import './index.css'
 
 ReactDOM.createRoot(document.getElementById('root')).render(
@@ -19,6 +20,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
             <Route path="smart-money"   element={<SmartMoney />} />
             <Route path="position-lab"  element={<PositionLab />} />
             <Route path="alert-engine"  element={<AlertEngine />} />
+          <Route path="research"      element={<Research />} />
           </Route>
         </Routes>
       </AppProvider>

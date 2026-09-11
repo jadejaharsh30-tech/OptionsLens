@@ -1,22 +1,40 @@
 # optionslens/backend/scheduler.py
 """
-Daily IV snapshot job — runs at 15:20 IST every market day.
-Snapshots ATM IV and spot price for all configured underlyings, writes to SQLite.
-This builds the historical IV store used by /api/ivrank (IV Rank + Realized Vol).
+Daily cron jobs.
 
-Token registration: when the user validates their token via
-/api/auth/validate, it is registered here for the cron job to use.
-If no token is registered by 15:20, the job is skipped gracefully.
+Two jobs, split by CAS (the closing auction, live 3 Aug 2026):
+
+  15:10 IST  run_daily_snapshot     — ATM IV for all underlyings, taken during
+                                      continuous trading, before the auction
+                                      opens at 15:15. Builds the IV history
+                                      that /api/ivrank ranks against.
+  15:50 IST  run_eod_close_capture  — official closing prices, taken after the
+                                      auction settles and derivatives stop.
+
+Splitting them is the point. A single 15:20 job sat inside the auction window,
+where F&O-eligible cash stocks have no continuous trading, and recorded a stale
+pre-auction print as the day's close.
+
+Token registration: when the user validates their token via /api/auth/validate
+it is registered here for the cron jobs. Without one, both skip gracefully.
 """
 import logging
 from datetime import date
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-from fyers_client import fetch_expiry_list, fetch_option_chain, fetch_quote, get_fyers
+from fyers_client import (
+    fetch_expiry_list, fetch_historical_prices, fetch_option_chain,
+    fetch_quote, get_fyers,
+)
 from chain_pricing import implied_forward_for_chain, price_for_iv
 from iv_engine import implied_vol_forward
+from market_hours import is_trading_day, now_ist
+from recorder.store import write_eod_close
 from snapshot_store import init_db, write_iv_snapshot, write_atm_iv, write_spot_price
-from config import UNDERLYINGS, RISK_FREE_RATE, DB_PATH
+from config import (
+    UNDERLYINGS, RISK_FREE_RATE, DB_PATH,
+    IV_SNAPSHOT_TIME_IST, EOD_CLOSE_TIME_IST,
+)
 
 logger    = logging.getLogger(__name__)
 scheduler = AsyncIOScheduler()
@@ -60,8 +78,10 @@ async def run_daily_snapshot():
                 logger.warning(f"No expiries for {symbol_key}, skipping.")
                 continue
 
-            # Persist today's closing spot price for realized vol computation
-            write_spot_price(DB_PATH, today, symbol_key, spot)
+            # NOTE: the closing price is NOT written here. This job runs during
+            # continuous trading, so `spot` is an intraday print, not a close.
+            # `run_eod_close_capture` records the official close after the
+            # auction settles.
 
             # Use nearest non-expired expiry
             from market_hours import time_to_expiry as days_to_expiry
@@ -131,19 +151,87 @@ async def run_daily_snapshot():
     logger.info(f"Daily IV snapshot complete for {today}.")
 
 
+async def run_eod_close_capture():
+    """
+    Runs at 15:50 IST, after the closing auction has settled and derivatives
+    have stopped trading.
+
+    Takes the official close from the exchange's own daily candle rather than
+    sampling a live quote. Under CAS the close for an F&O-eligible stock is the
+    auction equilibrium price — it is not any price you can observe by polling
+    during the session, so the only correct source is the daily bar.
+
+    Written to two places on purpose:
+      - `spot_history` (optionslens.db) — the app's own price series
+      - `eod_close`    (market_data.db) — research data, with provenance
+    """
+    if not _snapshot_token:
+        logger.warning("EOD close capture skipped — no token registered.")
+        return
+
+    now   = now_ist()
+    today = now.date().isoformat()
+
+    if not is_trading_day(now.date()):
+        logger.info("EOD close capture skipped — not a trading day.")
+        return
+
+    fyers    = get_fyers(_snapshot_token)
+    captured = 0
+
+    for symbol_key in UNDERLYINGS:
+        try:
+            closes = fetch_historical_prices(fyers, symbol_key, days=5)
+            if not closes:
+                logger.warning(f"No daily candles for {symbol_key} — no close captured.")
+                continue
+
+            official_close = closes[-1]
+            write_spot_price(DB_PATH, today, symbol_key, official_close)
+            write_eod_close(
+                session_date = today,
+                symbol       = symbol_key,
+                close_price  = official_close,
+                source       = "fyers_daily_candle",
+                captured_at  = now.isoformat(),
+            )
+            captured += 1
+            logger.info(f"EOD close {symbol_key}: {official_close:.2f}")
+
+        except Exception as e:
+            logger.error(f"EOD close capture failed for {symbol_key}: {repr(e)}")
+
+    logger.info(f"EOD close capture complete for {today} — {captured} symbols.")
+
+
 def start_scheduler():
     """
-    Starts the APScheduler background job.
+    Starts the APScheduler background jobs.
     Called once at FastAPI app startup via lifespan context manager.
     """
     init_db(DB_PATH)  # Ensure tables exist on startup
 
+    iv_hour, iv_min = (int(x) for x in IV_SNAPSHOT_TIME_IST.split(":"))
     scheduler.add_job(
         run_daily_snapshot,
-        CronTrigger(hour=15, minute=20, timezone="Asia/Kolkata"),
+        CronTrigger(hour=iv_hour, minute=iv_min, timezone="Asia/Kolkata"),
         id="daily_iv_snapshot",
         replace_existing=True,
         misfire_grace_time=300,  # 5 min grace — fires even if slightly delayed
     )
+
+    eod_hour, eod_min = (int(x) for x in EOD_CLOSE_TIME_IST.split(":"))
+    scheduler.add_job(
+        run_eod_close_capture,
+        CronTrigger(hour=eod_hour, minute=eod_min, timezone="Asia/Kolkata"),
+        id="eod_close_capture",
+        replace_existing=True,
+        misfire_grace_time=1800,  # 30 min — the close does not change, so a
+                                  # late run is still correct
+    )
+
     scheduler.start()
-    logger.info("APScheduler started. Daily IV snapshot scheduled at 15:20 IST.")
+    logger.info(
+        f"APScheduler started. IV snapshot {IV_SNAPSHOT_TIME_IST} IST "
+        f"(pre-auction), EOD close {EOD_CLOSE_TIME_IST} IST (post-auction)."
+    )

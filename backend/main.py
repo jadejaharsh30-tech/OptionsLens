@@ -19,6 +19,7 @@ from auth import get_token
 from fyers_client import fetch_quote, get_fyers
 from alert_engine.db import init_db as init_alert_engine_db
 from recorder.store import init_db as init_market_data_db
+from signals.store import init_db as init_signal_store
 
 # ── Routers ───────────────────────────────────────────────────────────────────
 from routers.expiries     import router as expiries_router
@@ -29,6 +30,11 @@ from routers.ivrank       import router as ivrank_router
 from routers.position_lab import router as position_lab_router
 from routers.alert_engine import router as alert_engine_router
 from routers.recorder     import router as recorder_router, start_recorder
+from routers.backtest     import router as backtest_router
+
+# Importing the signal library registers every signal. Must happen before the
+# registry is queried by /api/backtest/signals.
+import signals.library  # noqa: F401
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -40,6 +46,7 @@ async def lifespan(app: FastAPI):
     start_scheduler()
     init_alert_engine_db()  # Ensure alert-engine tables exist before the frontend polls /alerts
     init_market_data_db()   # Chain recorder store — append-only research data
+    init_signal_store()     # Signal evaluation log (same DB file)
     logger.info("OptionsLens API started.")
     yield
     logger.info("OptionsLens API shutting down.")
@@ -70,6 +77,7 @@ app.include_router(ivrank_router)
 app.include_router(position_lab_router)
 app.include_router(alert_engine_router)
 app.include_router(recorder_router)
+app.include_router(backtest_router)
 
 
 # ── Core endpoints ────────────────────────────────────────────────────────────

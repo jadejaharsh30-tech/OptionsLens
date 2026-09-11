@@ -48,17 +48,18 @@ SEBI/NSE replaced the old VWAP closing-price mechanism with a call auction for
 production** — published secondary sources disagree on whether the window ends
 15:30 or 15:35. `nseindia.com` is egress-blocked from the dev sandbox.
 
-### What CAS breaks in our code
+### What CAS broke, and how it is handled now
 
-- `is_market_open()` (`alert_engine/engine.py`) hardcodes a 15:30 close →
-  stops recording while derivatives are still trading until ~15:40.
-- `SNAPSHOT_TIME_IST = "15:20"` (`config.py`) now fires **inside the auction
-  window**. For the 5 stock underlyings there is no continuous trading then, so
-  the captured "spot" is a stale pre-auction print, not the official close.
-  This silently contaminates `spot_history` → realized vol → any VRP signal.
+- Session gating (was a hardcoded 15:30 close) → `market_hours.is_derivatives_open()`,
+  which runs to ~15:40. **Fixed, item 2.**
+- The 15:20 daily snapshot fired inside the auction window, recording a stale
+  pre-auction print as the day's close → IV snapshot moved to 15:10
+  (pre-auction) and the official close is captured separately at 15:50 from the
+  exchange daily candle. **Fixed, item 14.**
 - Expiry-day settlement for **stock** options now flows from the CAS
   equilibrium price, not the last-30-min VWAP. Max-pain / pinning logic built on
-  the old mechanism is stale for stocks.
+  the old mechanism is stale for stocks. **Still open** — matters before any
+  pinning signal is built.
 - Classic "pin to max pain in the last 30 minutes" assumed continuous trading
   into the close. For stocks that pressure now compresses into the auction.
 
@@ -92,28 +93,28 @@ differentiator. This is another reason the recorder is urgent.
 - [x] 11. Auto-start recorder on successful token validation (never miss a day by forgetting)
 - [x] 12. Recorder control/status API (`routers/recorder.py`)
 - [x] 13. Record through the CAS window to ~15:40 + tag every snapshot with session phase
-- [ ] 14. Capture official EOD close post-CAS, stored separately from intraday LTP
+- [x] 14. Official EOD close captured post-CAS at 15:50 via the exchange daily candle, stored separately from intraday LTP. IV snapshot moved 15:20 -> 15:10 so it sits in continuous trading, not inside the auction
 - [ ] 15. Capture futures price per symbol (needed for forward-based IV + basis signals)
-- [ ] 16. Data-quality monitor — gap detection, missed polls, coverage report per day
+- [x] 16. Data-quality monitor (`recorder/quality.py`) — per-session completeness, gap detection, missing trading days, CAS-window coverage flag
 - [ ] 17. Retention/compaction — parquet export + compression for long-term storage
-- [ ] 18. Recorder status indicator in the frontend UI
+- [x] 18. Recorder indicator in TopNav — flags 'running but not writing', which a simple on/off light would miss
 
-### Phase 2 — Signal framework
+### Phase 2 — Signal framework — COMPLETE
 
-- [ ] 19. Signal interface + registry — pure functions `(history) -> Optional[Signal]`, no broker imports
-- [ ] 20. Feature store — derived IV, Greeks, GEX, gamma-flip level, VRP, skew, term structure
-- [ ] 21. Signal versioning + parameter config (params live in config, never hardcoded in logic)
-- [ ] 22. Signal evaluation log — persist every evaluation, fired or not
+- [x] 19. `SignalContext`/`SignalResult` contract + versioned registry. Signals consume ChainSnapshot only — no broker import is reachable
+- [x] 20. Feature store (`signals/features.py`) — forward-based IV/Greeks, GEX profile, zero-gamma flip, max pain, 25d risk reversal, percentile helper
+- [x] 21. Versioned registration; params live in the spec and are swept by the backtester, never hardcoded in signal bodies
+- [x] 22. Evaluation log persists every evaluation with its skip reason, so the denominator and the kind-of-silence both survive
 
-### Phase 3 — Backtest engine
+### Phase 3 — Backtest engine — COMPLETE
 
-- [ ] 23. Event-driven replay over recorded snapshots (same interface as live)
-- [ ] 24. Cost model — bid-ask spread, slippage, brokerage, STT, exchange + GST charges
-- [ ] 25. Forward-return labelling at fixed horizons (+5m/+15m/+30m/EOD), chosen in advance
-- [ ] 26. Null benchmark — random entry at same time-of-day distribution
-- [ ] 27. Metrics — hit rate, expectancy, Sharpe, max drawdown, MAE/MFE, turnover
-- [ ] 28. Walk-forward / out-of-sample split with no peeking
-- [ ] 29. Backtest report page in the frontend
+- [x] 23. Snapshot replay with a bounded history window appended only AFTER evaluation — look-ahead is structurally impossible, and tested
+- [x] 24. Cost model — spread-aware fills (buy ask / sell bid) plus STT, exchange, SEBI, stamp, GST. One-sided books cannot be filled at all
+- [x] 25. Forward returns at 5/15/30/60m + EOD, fixed in advance. Horizons past available data return None rather than truncating
+- [x] 26. Matched null — random entries at the same clock times, mirroring the signal's direction mix, seeded for reproducibility
+- [x] 27. Per-horizon hit rate, mean/median, t-stat, Sharpe-per-observation, MAE/MFE, max drawdown, with automatic thin-sample warnings
+- [x] 28. Chronological and rolling walk-forward splits; test always follows train, windows tile without overlap
+- [x] 29. Research page — data-readiness banner first, null column beside every result, verdicts as words not numbers
 
 ### Phase 4 — Signals with actual edge (ranked by readiness)
 
@@ -123,7 +124,7 @@ differentiator. This is another reason the recorder is urgent.
   and `atm_iv_history` only builds one row per trading day from the day we started
   running. So this needs ~30 sessions of accumulation before it can be evaluated —
   it is not testable today as originally written
-- [ ] 31. **GEX regime** — zero-gamma flip level; momentum when net GEX < 0, mean-reversion when > 0
+- [x] 31. **GEX regime** — implemented as the first registered signal (`signals/library.py`); trades the flip level, not the raw GEX number. NOT yet validated — needs recorded data
 - [ ] 32. **Signed aggressor flow** — Lee-Ready style classification from bid/ask, replacing raw OI%
 - [ ] 33. **Term structure & skew** — front/back inversion, 25-delta risk reversal percentile
 - [ ] 34. **CAS auction dislocation** — 15:15 price vs CAS equilibrium; new since Aug 2026, unexploited
@@ -164,6 +165,17 @@ differentiator. This is another reason the recorder is urgent.
 
 Append one line per session. Keep it terse.
 
+- **2026-09-11 (5)** — Items 14, 16, 18, and all of Phases 2 and 3. The signal
+  framework and backtester now exist end-to-end: replay -> signal -> labels ->
+  matched null -> verdict. Validated on 4 synthetic sessions, and the validation
+  itself is the useful part — a signal firing on 100% of bars scored a 100% hit
+  rate and +9.79 bps mean, and the null comparison correctly returned NO_EDGE
+  with edge 0.00, because a signal that always fires carries no information. A
+  backtester without that column would have called it excellent.
+  Also: EOD close now captured post-auction at 15:50 from the daily candle, IV
+  snapshot moved to 15:10 (pre-auction), data-quality monitor, recorder health
+  indicator in TopNav, and GEX regime registered as the first real signal.
+  129 tests pass; frontend builds clean.
 - **2026-09-11 (4)** — Items 5 and 7. **Phase 0 complete.** Shared solver core:
   Newton-Raphson with a bracketed bisection fallback and a Brenner-Subrahmanyam
   initial guess. The important part is the vega-based identifiability gate — a

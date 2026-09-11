@@ -7,7 +7,17 @@ IV_SOLVER_MAX_ITER = 100
 IV_SOLVER_TOL = 1e-6
 IV_SOLVER_INITIAL_GUESS = 0.3   # 30% IV starting guess
 
-SNAPSHOT_TIME_IST = "15:20"     # Daily IV snapshot time
+# ── Daily job times (IST) ─────────────────────────────────────────────────────
+# The IV snapshot runs at 15:10, inside continuous trading and before the CAS
+# auction opens at 15:15. It used to run at 15:20, which under CAS lands in the
+# middle of the auction when F&O-eligible cash stocks have no continuous
+# trading and any quoted price is a stale pre-auction print.
+IV_SNAPSHOT_TIME_IST = "15:10"
+# The official close only exists after the auction settles, so closing prices
+# are captured separately once derivatives have stopped trading.
+EOD_CLOSE_TIME_IST   = "15:50"
+
+SNAPSHOT_TIME_IST = IV_SNAPSHOT_TIME_IST   # deprecated alias
 
 # ── Database paths ────────────────────────────────────────────────────────────
 # Env-configurable so the Docker volume mount actually persists data. These were

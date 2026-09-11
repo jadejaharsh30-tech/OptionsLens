@@ -79,7 +79,14 @@ def write_atm_iv(db_path: str, snapshot_date: str, symbol: str,
 
 def write_spot_price(db_path: str, snapshot_date: str,
                      symbol: str, spot: float):
-    """Persist today's closing spot price for realized vol computation."""
+    """
+    Persist a daily closing price.
+
+    Only ever call this with an OFFICIAL close (post-CAS), never with an
+    intraday LTP. Under CAS an F&O-eligible stock has no continuous trading
+    from 15:15, so a price sampled during the auction window is a stale
+    pre-auction print masquerading as a close.
+    """
     conn = sqlite3.connect(db_path)
     conn.execute("""
         INSERT OR IGNORE INTO spot_history (snapshot_date, symbol, spot)

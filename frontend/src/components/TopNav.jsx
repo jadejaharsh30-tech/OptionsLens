@@ -4,12 +4,14 @@ import { useEffect, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { useApp } from '../context/AppContext'
 import client from '../api/client'
+import RecorderStatus from './RecorderStatus'
 
 const NAV_TABS = [
   { to: '/',              label: 'Market Structure', end: true  },
   { to: '/smart-money',   label: 'Smart Money',      end: false },
   { to: '/position-lab',  label: 'Position Lab',     end: false },
   { to: '/alert-engine',  label: 'Alert Engine',     end: false },
+  { to: '/research',      label: 'Research',         end: false },
 ]
 
 export default function TopNav() {
@@ -109,6 +111,9 @@ export default function TopNav() {
           {timeStr} IST
         </span>
       )}
+
+      {/* Recorder health — always visible; silence is the failure mode */}
+      <RecorderStatus />
 
       <div className="flex-1" />
 
