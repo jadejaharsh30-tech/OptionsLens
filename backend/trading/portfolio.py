@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from chain_pricing import price_for_iv
-from config import RISK_FREE_RATE, UNDERLYINGS
+from config import RISK_FREE_RATE
 from iv_engine import black76_greeks, implied_vol_forward
 from trading.models import Trade
 
@@ -180,6 +180,7 @@ def portfolio_risk(trades: list[Trade], marks: list[PositionMark],
     return risk
 
 
-def lot_size_for(symbol: str) -> int:
-    cfg = UNDERLYINGS.get(symbol.upper())
-    return cfg["lot_size"] if cfg else 1
+def lot_size_for(symbol: str, expiry: str | None = None) -> int:
+    """Delegates to lot_sizes.lot_size_for, the single source of lot sizes."""
+    from lot_sizes import lot_size_for as _lot_size_for
+    return _lot_size_for(symbol, expiry)

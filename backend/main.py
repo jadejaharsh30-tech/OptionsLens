@@ -98,7 +98,7 @@ def health():
 def validate_token(token: str = Depends(get_token)):
     """
     Validates a Fyers access token by fetching a live Nifty quote.
-    Also registers the token for the daily 15:20 IST IV snapshot job.
+    Also registers the token for the daily 15:10 IST IV snapshot job.
     Call this once each morning after pasting your token.
     """
     try:
@@ -117,7 +117,7 @@ def validate_token(token: str = Depends(get_token)):
             "nifty_ltp":        nifty_ltp,
             "recorder_started": recorder_started,
             "message":          "Token valid. Registered for daily IV snapshot at "
-                                "15:20 IST. Chain recorder running.",
+                                "15:10 IST. Chain recorder running.",
         }
     except Exception as e:
         raise HTTPException(status_code=401, detail=str(e))
@@ -127,12 +127,13 @@ def validate_token(token: str = Depends(get_token)):
 def list_symbols():
     """Returns all configured underlyings with lot sizes and strike steps."""
     from config import UNDERLYINGS
+    from lot_sizes import lot_size_for
     return {
         "symbols": [
             {
                 "key":          k,
                 "fyers_symbol": v["symbol"],
-                "lot_size":     v["lot_size"],
+                "lot_size":     lot_size_for(k),
                 "strike_step":  v["strike_step"],
             }
             for k, v in UNDERLYINGS.items()

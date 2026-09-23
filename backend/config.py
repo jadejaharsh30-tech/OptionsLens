@@ -27,12 +27,22 @@ SNAPSHOT_TIME_IST = IV_SNAPSHOT_TIME_IST   # deprecated alias
 DB_PATH           = os.getenv("DB_PATH",           "optionslens.db")
 ALERT_ENGINE_DB   = os.getenv("ALERT_ENGINE_DB",   "oi_engine.db")
 MARKET_DATA_DB    = os.getenv("MARKET_DATA_DB",    "market_data.db")
+# Exchange EOD option history (bhavcopy/). Written by bhavcopy.download, which
+# usually runs on a home connection because NSE blocks datacenter ranges, then
+# read by bhavcopy.importer. Separate file so the ~1 MB/day archive never bloats
+# the app database.
+NSE_EOD_DB        = os.getenv("NSE_EOD_DB",        "nse_options_eod.db")
 
 # Fyers symbol strings
 # NOTE: Fyers expiry date format is DD-MM-YYYY (e.g. "24-04-2025")
+#
+# lot_size here is only a FALLBACK. Read lot sizes through lot_sizes.lot_size_for,
+# which uses the per-contract sizes NSE publishes (loaded by bhavcopy.importer).
+# NSE revises them several times a year; NIFTY and BANKNIFTY below were checked
+# against exchange files in September 2026, the stock entries were not.
 UNDERLYINGS = {
-    "NIFTY":     {"symbol": "NSE:NIFTY50-INDEX",   "lot_size": 75,  "strike_step": 50},
-    "BANKNIFTY": {"symbol": "NSE:NIFTYBANK-INDEX",  "lot_size": 15,  "strike_step": 100},
+    "NIFTY":     {"symbol": "NSE:NIFTY50-INDEX",   "lot_size": 65,  "strike_step": 50},
+    "BANKNIFTY": {"symbol": "NSE:NIFTYBANK-INDEX",  "lot_size": 30,  "strike_step": 100},
     "RELIANCE":  {"symbol": "NSE:RELIANCE-EQ",      "lot_size": 250, "strike_step": 20},
     "TCS":       {"symbol": "NSE:TCS-EQ",           "lot_size": 150, "strike_step": 25},
     "HDFCBANK":  {"symbol": "NSE:HDFCBANK-EQ",      "lot_size": 550, "strike_step": 10},

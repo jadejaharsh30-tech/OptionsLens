@@ -23,6 +23,7 @@ from auth import get_token
 from chain_pricing import implied_forward_for_chain
 from config import UNDERLYINGS
 from fyers_client import fetch_option_chain, fetch_quote, get_fyers
+from lot_sizes import lot_size_for
 from market_hours import time_to_expiry
 from notify import get_dispatcher
 from notify.events import trade_closed, trade_opened, trade_rejected
@@ -177,7 +178,9 @@ async def propose(req: ProposeRequest, token: str = Depends(get_token)):
     if not chain:
         raise HTTPException(404, "No chain data returned.")
 
-    lot_size = UNDERLYINGS[symbol]["lot_size"]
+    # Per contract, from exchange data: during a revision the near and far
+    # expiries carry different lot sizes, and config was stale anyway.
+    lot_size = lot_size_for(symbol, req.expiry_date)
     by_key = {(r["strike"], r["option_type"]): r for r in chain}
 
     primary_key = (req.legs[0].strike, req.legs[0].option_type)

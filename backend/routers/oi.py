@@ -15,6 +15,7 @@ from chain_pricing import implied_forward_for_chain, price_for_iv
 from fyers_client import fetch_option_chain, fetch_quote, get_fyers
 from iv_engine import black76_greeks, implied_vol_forward
 from gex_engine import compute_net_gex_profile
+from lot_sizes import lot_size_for
 from config import UNDERLYINGS, RISK_FREE_RATE
 from market_hours import time_to_expiry as days_to_expiry
 
@@ -69,7 +70,6 @@ def get_oi_analysis(
     if symbol not in UNDERLYINGS:
         raise HTTPException(400, f"Unknown symbol: {symbol}")
 
-    cfg   = UNDERLYINGS[symbol]
     fyers = get_fyers(token)
     spot  = fetch_quote(fyers, symbol)
     T     = days_to_expiry(expiry_date)
@@ -146,7 +146,8 @@ def get_oi_analysis(
         })
 
     oi_table    = sorted(by_strike.values(), key=lambda x: x["strike"])
-    gex_profile = compute_net_gex_profile(gex_inputs, cfg["lot_size"], spot)
+    gex_profile = compute_net_gex_profile(
+        gex_inputs, lot_size_for(symbol, expiry_date), spot)
 
     return {
         "symbol":        symbol,
