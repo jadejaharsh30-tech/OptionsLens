@@ -4,10 +4,11 @@ Daily cron jobs.
 
 Two jobs, split by CAS (the closing auction, live 3 Aug 2026):
 
-  15:10 IST  run_daily_snapshot     — ATM IV for all underlyings, taken during
-                                      continuous trading, before the auction
-                                      opens at 15:15. Builds the IV history
-                                      that /api/ivrank ranks against.
+  15:10 IST  run_daily_snapshot     — ATM IV for the expiries either side of
+                                      30 days, taken during continuous trading,
+                                      before the auction opens at 15:15. Builds
+                                      the 30-day IV history /api/ivrank ranks
+                                      against.
   15:50 IST  run_eod_close_capture  — official closing prices, taken after the
                                       auction settles and derivatives stop.
 
@@ -19,15 +20,14 @@ Token registration: when the user validates their token via /api/auth/validate
 it is registered here for the cron jobs. Without one, both skip gracefully.
 """
 import logging
-from datetime import date
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from fyers_client import (
-    fetch_expiry_list, fetch_historical_prices, fetch_option_chain,
-    fetch_quote, get_fyers,
+    fetch_expiry_list, fetch_historical_prices, fetch_quote, get_fyers,
 )
 from chain_pricing import implied_forward_for_chain, price_for_iv
 from iv_engine import implied_vol_forward
+from live_iv import live_cm_atm_iv
 from market_hours import is_trading_day, now_ist
 from recorder.store import write_eod_close
 from snapshot_store import init_db, write_iv_snapshot, write_atm_iv, write_spot_price
@@ -57,15 +57,16 @@ def register_token(token: str):
 
 async def run_daily_snapshot():
     """
-    Runs at 15:20 IST. Fetches live IV + spot for all underlyings and persists to SQLite.
+    Runs at 15:10 IST. Fetches live IV for all underlyings and persists to SQLite.
     Errors per-symbol are logged but never crash the server.
     """
     if not _snapshot_token:
         logger.warning("Daily IV snapshot skipped — no token registered. "
-                       "Call /api/auth/validate before 15:20 IST.")
+                       "Call /api/auth/validate before 15:10 IST.")
         return
 
-    today = date.today().isoformat()
+    # IST date, not date.today(): on a UTC host the two differ after 18:30 IST.
+    today = now_ist().date().isoformat()
     fyers = get_fyers(_snapshot_token)
     logger.info(f"Daily IV snapshot starting for {today}...")
 
@@ -83,72 +84,59 @@ async def run_daily_snapshot():
             # `run_eod_close_capture` records the official close after the
             # auction settles.
 
-            # Use nearest non-expired expiry
-            from market_hours import time_to_expiry as days_to_expiry
-            exp = next((e for e in expiries if days_to_expiry(e["date"]) > 0), None)
-            if exp is None:
-                logger.warning(f"All expiries past for {symbol_key}, skipping.")
+            # The expiries either side of 30 days, not just the nearest one:
+            # IV Rank ranks 30-day constant-maturity IV, and a history holding
+            # only the front expiry cannot be interpolated to 30 days.
+            term = live_cm_atm_iv(fyers, symbol_key, spot, expiries,
+                                  strike_count=10)
+            if not term.expiries:
+                logger.warning(f"No expiries bracket 30 days for {symbol_key}, skipping.")
                 continue
 
-            T     = days_to_expiry(exp["date"])
-            chain = fetch_option_chain(fyers, symbol_key, exp["expiry"], strike_count=10)
-
-            # Forward-based, matching the live endpoints. IV Rank compares
-            # today's IV against this stored history, so the two must be
-            # computed the same way or the rank is meaningless.
-            forward = implied_forward_for_chain(chain, T, spot)
-            if forward is None:
-                logger.warning(f"No implied forward for {symbol_key} — skipping.")
-                continue
-
-            atm_iv_values = []
-            for opt in chain:
-                price = price_for_iv(opt)
-                if not price:
+            for reading in term.expiries:
+                _write_strike_snapshots(today, symbol_key, spot, reading)
+                if reading.atm_iv is None:
+                    logger.warning(f"No ATM IV for {symbol_key} {reading.expiry_date}.")
                     continue
-                iv = implied_vol_forward(
-                    market_price=price,
-                    F=forward, K=opt["strike"], T=T,
-                    r=RISK_FREE_RATE,
-                    option_type=opt["option_type"],
-                )
-                if iv is None:
-                    continue
+                write_atm_iv(DB_PATH, today, symbol_key, reading.expiry_date,
+                             reading.atm_iv)
 
-                # Write every strike's IV snapshot
-                write_iv_snapshot(
-                    db_path=DB_PATH,
-                    snapshot_date=today,
-                    symbol=symbol_key,
-                    expiry_date=exp["date"],
-                    strike=opt["strike"],
-                    option_type=opt["option_type"],
-                    iv=iv,
-                    ltp=opt["ltp"],
-                    oi=opt["oi"],
-                )
-
-                # Collect near-ATM IVs (within 2% of spot) for ATM average
-                if abs(opt["strike"] - spot) / spot <= 0.02:
-                    atm_iv_values.append(iv)
-
-            # Write ATM IV to history table (used for IV Rank)
-            if atm_iv_values:
-                atm_iv = sum(atm_iv_values) / len(atm_iv_values)
-                write_atm_iv(DB_PATH, today, symbol_key, exp["date"], atm_iv)
+            if term.cm_iv is not None:
                 logger.info(
-                    f"Snapshot saved: {symbol_key} "
-                    f"ATM IV = {atm_iv * 100:.1f}% "
-                    f"(spot={spot:.0f}, expiry={exp['date']})"
+                    f"Snapshot saved: {symbol_key} 30d ATM IV = {term.cm_iv * 100:.1f}% "
+                    f"(spot={spot:.0f}, expiries={', '.join(term.expiries_used)})"
                 )
             else:
-                logger.warning(f"No ATM IV computed for {symbol_key} — "
-                               f"all near-ATM options had zero LTP or unsolvable IV.")
+                logger.warning(f"No 30-day IV for {symbol_key} today; per-expiry "
+                               f"rows written where they solved.")
 
         except Exception as e:
             logger.error(f"Snapshot failed for {symbol_key}: {repr(e)}")
 
     logger.info(f"Daily IV snapshot complete for {today}.")
+
+
+def _write_strike_snapshots(today: str, symbol_key: str, spot: float, reading) -> None:
+    """Per-strike IV for one fetched chain, into iv_snapshots."""
+    T = reading.tenor_days / 365.0
+    forward = implied_forward_for_chain(reading.chain, T, spot)
+    if forward is None:
+        return
+    for opt in reading.chain:
+        price = price_for_iv(opt)
+        if not price:
+            continue
+        iv = implied_vol_forward(
+            market_price=price, F=forward, K=opt["strike"], T=T,
+            r=RISK_FREE_RATE, option_type=opt["option_type"],
+        )
+        if iv is None:
+            continue
+        write_iv_snapshot(
+            db_path=DB_PATH, snapshot_date=today, symbol=symbol_key,
+            expiry_date=reading.expiry_date, strike=opt["strike"],
+            option_type=opt["option_type"], iv=iv, ltp=opt["ltp"], oi=opt["oi"],
+        )
 
 
 async def run_eod_close_capture():

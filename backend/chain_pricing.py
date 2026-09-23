@@ -15,6 +15,7 @@ No Fyers or FastAPI imports here — the backtester feeds it recorded rows.
 from typing import Optional
 
 from forward_engine import implied_forward
+from iv_engine import implied_vol_forward
 
 
 def price_for_iv(row: dict) -> Optional[float]:
@@ -56,6 +57,46 @@ def implied_forward_for_chain(chain: list[dict], T: float,
     mixed into a forward-based surface is worse than a missing point.
     """
     return implied_forward(parity_pairs(chain), T, r=_rate(), spot=spot)
+
+
+def atm_iv_for_chain(chain: list[dict], T: float,
+                     spot: float) -> Optional[float]:
+    """
+    ATM implied vol for one expiry: the mean of the solvable call and put IVs at
+    the strike nearest the chain's implied forward.
+
+    This is the single definition used by the live IV Rank endpoint, the daily
+    snapshot job and the bhavcopy importer. IV Rank compares today's reading
+    against stored history, so any difference in how the two are computed shows
+    up as a fake regime shift at the boundary.
+
+    It used to be an average over every strike within 2% of spot. That band is
+    asymmetric in a skewed smile, and when a volume gate drops some strikes (as
+    the exchange-EOD history must) the band's composition changes day to day.
+    One strike at the forward avoids both problems.
+
+    Returns None when no forward can be implied or neither leg at the ATM strike
+    solves — never a spot-based substitute.
+    """
+    forward = implied_forward_for_chain(chain, T, spot)
+    if forward is None:
+        return None
+
+    priced = [row for row in chain if price_for_iv(row)]
+    if not priced:
+        return None
+    atm = min({row["strike"] for row in priced}, key=lambda k: abs(k - forward))
+
+    r = _rate()
+    ivs = []
+    for row in priced:
+        if row["strike"] != atm:
+            continue
+        iv = implied_vol_forward(price_for_iv(row), forward, atm, T, r,
+                                 row["option_type"])
+        if iv is not None:
+            ivs.append(iv)
+    return sum(ivs) / len(ivs) if ivs else None
 
 
 def _rate() -> float:

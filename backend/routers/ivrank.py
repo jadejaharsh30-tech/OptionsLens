@@ -3,28 +3,35 @@
 GET /api/ivrank/{symbol}
 Returns current ATM IV, IV Rank, and Realized Volatility comparison for a symbol.
 
-IV Rank = (current_IV - 52w_low) / (52w_high - 52w_low) × 100
+Current IV is 30-day constant-maturity ATM IV: the ATM IVs of the two expiries
+either side of 30 days, interpolated in total variance. It used to be the
+nearest expiry's ATM IV, which on NIFTY weeklies swings several vol points
+purely from the contract approaching expiry, so the rank largely tracked the
+day of the expiry cycle.
+
+IV Rank is the percentile of that reading within the last 252 dated 30-day
+readings in the local store — the share of past readings below today's. It is
+no longer (IV − low) / (high − low), where one spike day set the range for a
+year and pinned every later reading near zero.
+
 RV = close-to-close annualised realized volatility (20d and 60d windows)
-Vol Premium = ATM IV - RV 20d (positive = IV rich, negative = IV cheap)
+Vol Premium = 30-day ATM IV − RV 20d (positive = IV rich, negative = IV cheap).
+20 trading days is roughly 30 calendar days, so the two legs now share a tenor.
 
-RV is computed from Fyers historical daily OHLC — available from day 1,
-no local snapshot accumulation required.
-
-IV Rank still requires local daily snapshots (no broker provides historical IV).
-Returns iv_rank=None with an explanatory note until 5+ days of history exist.
+History comes from the 15:10 daily snapshot and, for anything before it, from
+exchange EOD data loaded with `python -m bhavcopy.importer`.
 """
 from fastapi import APIRouter, Depends, HTTPException
 from auth import get_token
 from fyers_client import (
-    fetch_expiry_list, fetch_option_chain, fetch_quote,
-    fetch_historical_prices, get_fyers,
+    fetch_expiry_list, fetch_quote, fetch_historical_prices, get_fyers,
 )
-from chain_pricing import implied_forward_for_chain, price_for_iv
-from iv_engine import implied_vol_forward
-from snapshot_store import get_iv_rank, get_atm_iv_history
+from live_iv import live_cm_atm_iv
+from snapshot_store import get_cm_iv_history, get_iv_percentile
 from realized_vol import compute_realized_vol, compute_rv_series
-from config import UNDERLYINGS, RISK_FREE_RATE, DB_PATH
-from market_hours import time_to_expiry as days_to_expiry
+from config import UNDERLYINGS, DB_PATH
+
+HISTORY_DATES = 252      # one year of trading dates
 
 router = APIRouter(prefix="/api/ivrank", tags=["ivrank"])
 
@@ -32,19 +39,23 @@ router = APIRouter(prefix="/api/ivrank", tags=["ivrank"])
 @router.get("/{symbol}")
 def get_iv_rank_endpoint(symbol: str, token: str = Depends(get_token)):
     """
-    Computes current ATM IV from live chain.
+    Computes current 30-day ATM IV from the live chains either side of 30 days.
     RV is fetched from Fyers historical daily prices — fully available from day 1.
-    IV Rank is looked up from the local snapshot store — builds over time.
+    IV Rank is a percentile against the local 30-day IV history.
 
     Returns:
-        current_iv:   ATM IV as % (e.g. 13.5 = 13.5%)
-        iv_rank:      0-100 percentile rank, or null if < 5 days history
-        history_days: days of local IV history available
-        note:         explanation if iv_rank is null
-        rv_20d:       20-day annualised RV as % — available immediately
-        rv_60d:       60-day annualised RV as % — available immediately
-        vol_premium:  ATM IV minus RV 20d in pct points (positive = IV rich)
-        iv_rv_series: [{date, atm_iv, rv_20d, premium}] for the IVvsRV chart
+        current_iv:    30-day constant-maturity ATM IV as % (13.5 = 13.5%)
+        iv_rank:       0-100 percentile of current_iv in the last 252 dated
+                       readings, or null with fewer than 20
+        rank_method:   "percentile"
+        iv_tenor_days: 30
+        expiries_used: expiries whose chains produced current_iv
+        history_days:  dates with a 30-day reading in the local store
+        note:          explanation when current_iv or iv_rank is null
+        rv_20d:        20-day annualised RV as % — available immediately
+        rv_60d:        60-day annualised RV as % — available immediately
+        vol_premium:   30-day ATM IV minus RV 20d in pct points
+        iv_rv_series:  [{date, atm_iv, rv_20d, premium}] for the IVvsRV chart
     """
     symbol = symbol.upper()
     if symbol not in UNDERLYINGS:
@@ -56,54 +67,38 @@ def get_iv_rank_endpoint(symbol: str, token: str = Depends(get_token)):
 
     empty = {
         "symbol": symbol, "current_iv": None, "iv_rank": None,
-        "note": None, "rv_20d": None, "rv_60d": None,
+        "rank_method": "percentile", "iv_tenor_days": 30, "expiries_used": [],
+        "history_days": 0, "note": None, "rv_20d": None, "rv_60d": None,
         "vol_premium": None, "iv_rv_series": [],
     }
 
     if not expiries:
         return {**empty, "note": "No expiry data available."}
 
-    exp = next((e for e in expiries if days_to_expiry(e["date"]) > 0), None)
-    if exp is None:
-        return {**empty, "note": "All expiries have passed."}
-
-    T     = days_to_expiry(exp["date"])
-    chain = fetch_option_chain(fyers, symbol, exp["expiry"], strike_count=6)
-
-    # ── ATM IV from live chain ────────────────────────────────────────────────
-    # Forward-based, matching /api/chain and /api/surface. This number feeds IV
-    # Rank and the vol-premium calculation, so a spot-based bias here would
-    # propagate straight into the VRP signal.
-    forward = implied_forward_for_chain(chain, T, spot)
-    iv_values = []
-    for opt in chain:
-        price = price_for_iv(opt)
-        if not price or not forward:
-            continue
-        if abs(opt["strike"] - spot) / spot > 0.02:
-            continue
-        iv = implied_vol_forward(
-            market_price=price,
-            F=forward, K=opt["strike"], T=T,
-            r=RISK_FREE_RATE,
-            option_type=opt["option_type"],
-        )
-        if iv is not None:
-            iv_values.append(iv)
-
-    current_iv     = sum(iv_values) / len(iv_values) if iv_values else None
+    # ── 30-day ATM IV from the live chains bracketing 30 days ─────────────────
+    # Same expiry choice, ATM definition and interpolation as the daily
+    # snapshot that builds the history, so rank compares like with like.
+    term = live_cm_atm_iv(fyers, symbol, spot, expiries)
+    current_iv     = term.cm_iv
     current_iv_pct = round(current_iv * 100, 2) if current_iv else None
 
-    # ── IV Rank from local snapshot store ────────────────────────────────────
-    iv_rank = get_iv_rank(DB_PATH, symbol, current_iv) if current_iv else None
-    history = get_atm_iv_history(DB_PATH, symbol, days=365)
+    # ── IV Rank: percentile within the local 30-day history ───────────────────
+    history = get_cm_iv_history(DB_PATH, symbol, days=HISTORY_DATES)
+    iv_rank = get_iv_percentile(DB_PATH, symbol, current_iv, days=HISTORY_DATES) \
+        if current_iv else None
+    if iv_rank is not None:
+        iv_rank = round(iv_rank, 2)
 
     note = None
-    if iv_rank is None:
+    if current_iv is None:
+        note = ("No 30-day IV right now: the expiries either side of 30 days did "
+                "not both produce a solvable at-the-money quote.")
+    elif iv_rank is None:
         note = (
-            f"IV Rank requires 5+ days of history. "
-            f"Currently have {len(history)} day(s). "
-            f"Snapshot runs daily at 15:20 IST — check back tomorrow."
+            f"IV Rank needs 20+ days of 30-day IV history; the store has "
+            f"{len(history)}. Load exchange history with "
+            f"`python -m bhavcopy.importer`, or it builds by one day at 15:10 IST "
+            f"each trading day."
         )
 
     # ── Realized vol from Fyers historical prices — available from day 1 ─────
@@ -126,6 +121,9 @@ def get_iv_rank_endpoint(symbol: str, token: str = Depends(get_token)):
 
         # Build IV vs RV time series for the AreaChart
         rv_series   = compute_rv_series(closes, window=20)
+        # One constant-maturity reading per date. Keying the raw per-expiry
+        # rows by date instead would keep whichever expiry happened to be read
+        # last, a different tenor on different days.
         iv_hist_map = {r["date"]: round(r["iv"] * 100, 2) for r in history}
 
         if rv_series and iv_hist_map:
@@ -154,15 +152,17 @@ def get_iv_rank_endpoint(symbol: str, token: str = Depends(get_token)):
             ]
 
     return {
-        "symbol":       symbol,
-        "spot":         spot,
-        "expiry_date":  exp["date"],
-        "current_iv":   current_iv_pct,
-        "iv_rank":      iv_rank,
-        "history_days": len(history),
-        "note":         note,
-        "rv_20d":       rv_20d_pct,
-        "rv_60d":       rv_60d_pct,
-        "vol_premium":  vol_premium,
-        "iv_rv_series": iv_rv_series,
+        "symbol":        symbol,
+        "spot":          spot,
+        "current_iv":    current_iv_pct,
+        "iv_rank":       iv_rank,
+        "rank_method":   "percentile",
+        "iv_tenor_days": 30,
+        "expiries_used": term.expiries_used,
+        "history_days":  len(history),
+        "note":          note,
+        "rv_20d":        rv_20d_pct,
+        "rv_60d":        rv_60d_pct,
+        "vol_premium":   vol_premium,
+        "iv_rv_series":  iv_rv_series,
     }

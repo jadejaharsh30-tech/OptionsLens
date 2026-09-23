@@ -95,7 +95,7 @@ export default function IVvsRVPanel({ data }) {
       {/* Metric strip */}
       <div className="grid grid-cols-3 gap-4">
         {[
-          { label: 'ATM IV',  value: current_iv, color: '#D97706' },
+          { label: 'ATM IV 30d', value: current_iv, color: '#D97706' },
           { label: 'RV 20d',  value: rv_20d,     color: '#0D9488' },
           { label: 'RV 60d',  value: rv_60d,     color: '#7A6355' },
         ].map(({ label, value, color }) => (
@@ -138,7 +138,7 @@ export default function IVvsRVPanel({ data }) {
             <Area
               type="monotone"
               dataKey="atm_iv"
-              name="ATM IV"
+              name="ATM IV 30d"
               stroke="#D97706"
               fill="rgba(217,119,6,0.08)"
               strokeWidth={2}

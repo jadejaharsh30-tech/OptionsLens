@@ -10,6 +10,8 @@ import math
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from chain_pricing import implied_forward_for_chain, parity_pairs, price_for_iv  # noqa: E402
@@ -234,3 +236,41 @@ def test_forward_from_a_realistic_chain():
             chain.append({"strike": k, "option_type": opt,
                           "ltp": px, "bid": px - 0.5, "ask": px + 0.5})
     assert abs(implied_forward_for_chain(chain, T, spot=24500.0) - F_true) < 1.0
+
+
+class TestAtmIvForChain:
+    """chain_pricing.atm_iv_for_chain — the one ATM IV definition shared by the
+    live endpoint, the daily snapshot job and the bhavcopy importer."""
+
+    @staticmethod
+    def _chain(F, T, vol_at, strikes, r):
+        from iv_engine import black76_price
+        rows = []
+        for k in strikes:
+            for ot in ("CE", "PE"):
+                px = black76_price(F, k, T, r, vol_at(k), ot)
+                rows.append({"strike": k, "option_type": ot, "ltp": round(px, 2),
+                             "bid": 0, "ask": 0})
+        return rows
+
+    def test_recovers_the_vol_at_the_forward_not_at_spot(self):
+        from chain_pricing import atm_iv_for_chain
+        from config import RISK_FREE_RATE
+        F, spot, T = 24_100.0, 24_000.0, 20 / 365
+        # A skewed smile: vol falls 1 point per 100 of strike above the forward.
+        smile = lambda k: 0.12 - (k - 24_100.0) / 100 * 0.01
+        chain = self._chain(F, T, smile, range(23_600, 24_650, 50), RISK_FREE_RATE)
+        iv = atm_iv_for_chain(chain, T, spot)
+        assert iv == pytest.approx(0.12, abs=2e-4)
+
+    def test_none_without_a_parity_pair(self):
+        from chain_pricing import atm_iv_for_chain
+        chain = [{"strike": 24_000.0, "option_type": "CE", "ltp": 150.0,
+                  "bid": 0, "ask": 0}]
+        assert atm_iv_for_chain(chain, 20 / 365, 24_000.0) is None
+
+    def test_none_when_expired(self):
+        from chain_pricing import atm_iv_for_chain
+        chain = [{"strike": 24_000.0, "option_type": ot, "ltp": 150.0,
+                  "bid": 0, "ask": 0} for ot in ("CE", "PE")]
+        assert atm_iv_for_chain(chain, 0.0, 24_000.0) is None
