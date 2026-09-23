@@ -94,7 +94,7 @@ differentiator. This is another reason the recorder is urgent.
 - [x] 12. Recorder control/status API (`routers/recorder.py`)
 - [x] 13. Record through the CAS window to ~15:40 + tag every snapshot with session phase
 - [x] 14. Official EOD close captured post-CAS at 15:50 via the exchange daily candle, stored separately from intraday LTP. IV snapshot moved 15:20 -> 15:10 so it sits in continuous trading, not inside the auction
-- [ ] 15. Capture futures price per symbol (needed for forward-based IV + basis signals)
+- [ ] 15. Capture futures price per symbol (needed for forward-based IV + basis signals). Daily history exists in the bhavcopy archive's `daily_future` table; the live recorder still does not capture it
 - [x] 16. Data-quality monitor (`recorder/quality.py`) — per-session completeness, gap detection, missing trading days, CAS-window coverage flag
 - [ ] 17. Retention/compaction — parquet export + compression for long-term storage
 - [x] 18. Recorder indicator in TopNav — flags 'running but not writing', which a simple on/off light would miss
@@ -123,10 +123,14 @@ differentiator. This is another reason the recorder is urgent.
   but the *signal* is the percentile rank of that spread against its own history,
   and `atm_iv_history` only builds one row per trading day from the day we started
   running. So this needs ~30 sessions of accumulation before it can be evaluated —
-  it is not testable today as originally written
+  it is not testable today as originally written.
+  UPDATE 2026-09-23: history is no longer the blocker. `bhavcopy/` backfills
+  per-expiry ATM IV from NSE end-of-day files (545 trading days from 2024-07-08
+  loaded locally), and IV is now 30-day constant maturity, the tenor that
+  matches RV 20d. The signal itself is not built yet
 - [x] 31. **GEX regime** — implemented as the first registered signal (`signals/library.py`); trades the flip level, not the raw GEX number. NOT yet validated — needs recorded data
 - [ ] 32. **Signed aggressor flow** — Lee-Ready style classification from bid/ask, replacing raw OI%
-- [ ] 33. **Term structure & skew** — front/back inversion, 25-delta risk reversal percentile
+- [ ] 33. **Term structure & skew** — front/back inversion, 25-delta risk reversal percentile. `eod_vol.term_structure_slope` (60d minus 30d constant-maturity IV) exists; no signal registered yet
 - [ ] 34. **CAS auction dislocation** — 15:15 price vs CAS equilibrium; new since Aug 2026, unexploited
 - [ ] 35. **Dispersion / implied correlation** — index IV vs cap-weighted constituent IV (we already have 5 constituents configured)
 - [ ] 36. Signal ensemble + conflict resolution
@@ -164,6 +168,19 @@ differentiator. This is another reason the recorder is urgent.
 ## Progress log
 
 Append one line per session. Keep it terse.
+
+- **2026-09-23 (7)** — Exchange EOD history and a corrected IV Rank. New
+  `bhavcopy/` package: a stdlib-only NSE archive downloader (both schema eras,
+  verified against live files) and an importer into the app's own stores.
+  545 trading days from 2024-07-08 downloaded locally, 2.8M option rows, zero
+  gaps. Measured on real files: untraded contracts publish yesterday's close as
+  today's, expiry-day settlement is the index level, OI is in shares. IV Rank
+  was ranking front-expiry IV, which is mostly the weekly roll (6.8 vs 2.2 vol
+  point range over 29 sessions), and its history query mixed tenors once a date
+  had more than one expiry. It now ranks 30-day constant-maturity IV as a
+  percentile. Lot sizes come from exchange data per contract: config had NIFTY
+  75 / BANKNIFTY 15 against 65 / 30, so trade sizing took twice the intended
+  risk on BANKNIFTY. 246 tests pass; frontend builds clean.
 
 - **2026-09-11 (6)** — All of Phase 5 (38-47) plus notifications 48-49.
   Trade lifecycle is live end-to-end on paper: propose -> size -> entry gates ->
@@ -227,11 +244,33 @@ Append one line per session. Keep it terse.
   IV Rank spanning that boundary is slightly distorted. `iv_snapshots` keeps
   per-strike `ltp`, so a one-off rebuild is possible; otherwise accept the seam
   and note it. Matters for item 30 (VRP).
+  The bhavcopy importer never overwrites, so on any date that already has a
+  live row, that row stays and the importer only adds the other expiries. Those
+  dates mix one live reading (mid-based, and spot-based before 2026-09-11) with
+  close-based ones. `atm_iv_history.source` identifies them if they need
+  replacing.
+
+- **Pre-July-2024 history.** The archive downloads back to 2000 and has options
+  from 2001, but older files need two fixes first: some years (2003, 2005, 2006
+  seen) spell the option-type column differently, and no file before 2024-07-08
+  carries an underlying price, so spot must come from futures. Signals built on
+  monthly expiries (VRP, term structure) could usefully go back to ~2008, which
+  adds the 2008 crash and March 2020. Weekly-expiry signals only have history
+  from 2016 (BANKNIFTY) and 2019 (NIFTY).
+
+- **Stock IV history coverage.** Stocks list monthly expiries only and the
+  second month often barely trades, so trade-based history may lack a 30-day
+  reading on many dates. Live readings use bid-ask mids and are unaffected. If
+  coverage is poor, options are a single-expiry reading within a few days of 30,
+  or a different target tenor for monthly-only names.
 
 - **Exact CAS window end (15:30 vs 15:35)** — confirm against the NSE circular.
 - **Index options settlement under CAS** — index options aren't directly in CAS,
   but the index close derives from CAS constituent closes. Confirm the exact
   index-options final-settlement methodology before building pinning signals.
+  Partial answer: on expiry day the bhavcopy's `SttlmPric` for every index
+  option contract is the official settlement level of the index itself, so the
+  settlement value per expiry is available historically.
 - **Fyers futures symbol construction** — needed for item 15 (forward-based IV).
   Format not yet verified; the `futures` column exists but is unpopulated.
 - **Storage backend at scale** — SQLite is fine to ~1 GB/yr; revisit parquet +
