@@ -11,6 +11,7 @@ const NAV_TABS = [
   { to: '/smart-money',   label: 'Smart Money',      end: false },
   { to: '/position-lab',  label: 'Position Lab',     end: false },
   { to: '/alert-engine',  label: 'Alert Engine',     end: false },
+  { to: '/trades',        label: 'Trades',           end: false },
   { to: '/research',      label: 'Research',         end: false },
 ]
 

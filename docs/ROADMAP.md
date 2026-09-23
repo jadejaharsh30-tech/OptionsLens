@@ -132,23 +132,23 @@ differentiator. This is another reason the recorder is urgent.
 - [ ] 36. Signal ensemble + conflict resolution
 - [ ] 37. Retire/replace the `SHORT_BUILDUP` heuristic once a measured signal beats it
 
-### Phase 5 — Trade lifecycle & journal
+### Phase 5 — Trade lifecycle & journal — COMPLETE
 
-- [ ] 38. Trade state machine: `SIGNAL → PROPOSED → OPEN → CLOSED → JOURNALED`
-- [ ] 39. Entry rules — limit vs market, max spread tolerance, signal revalidation at fill time
-- [ ] 40. Position sizing + risk budget per trade and per day
-- [ ] 41. Options-aware exit rules — price stop, target, IV-based exit, theta time-stop, delta-drift exit, hard expiry-day flatten
-- [ ] 42. Paper fill engine (spread-aware, not mid-fill fantasy)
-- [ ] 43. Live MTM + live position Greeks
-- [ ] 44. MAE/MFE tracking per trade (is the stop too tight?)
-- [ ] 45. Trade history + journal/postmortem view
-- [ ] 46. Portfolio-level risk — net Greeks, margin estimate, concentration limits
-- [ ] 47. Live execution adapter behind an explicit config flag (paper is the default, always)
+- [x] 38. Trade state machine with validated transitions — illegal moves raise rather than silently correcting
+- [x] 39. Entry gates — spread/OI/volume floors, underlying-drift check (refuses to chase), signal revalidation at fill. All failures collected, not short-circuited
+- [x] 40. Risk-budget sizing. Floors to whole lots (rounding up silently exceeds budget); shorts sized off stop distance, never off premium received
+- [x] 41. Exit rules: stop, target, trailing giveback, IV-crush (longs only), delta drift, time stop, hard expiry flatten which outranks everything
+- [x] 42. Paper fills reuse the BACKTESTER's cost model — if paper were more optimistic, forward and backtest results would diverge for reasons unrelated to the signal
+- [x] 43. MTM + position Greeks recomputed from current prices, never carried from entry
+- [x] 44. MAE/MFE tracked on every mark while open
+- [x] 45. Trades page + journal stats; auto-drafted postmortem flags the MAE-vs-outcome relationship
+- [x] 46. Portfolio net Greeks, concentration and short-vega/short-gamma warnings
+- [x] 47. Broker abstraction with PaperBroker default. LiveBroker deliberately raises NotImplementedError — wiring real orders is a separate, explicit decision, never an inherited default
 
 ### Phase 6 — Notifications
 
-- [ ] 48. Notification channel interface (pluggable)
-- [ ] 49. **Telegram bot** — alerts with inline ack/suppress buttons (do this first: token + one POST)
+- [x] 48. Channel interface + Dispatcher with dedupe and a severity floor. Channel failures are swallowed: a missed alert must never break position management
+- [x] 49. **Telegram** — HTML-escaped, length-capped, lazily imported. `verify` distinguishes a bad token from a bad chat_id. (Inline ack/suppress buttons not yet wired — needs a webhook.)
 - [ ] 50. Notification rules — dedupe, quiet hours, severity routing
 - [ ] 51. Web push / email fallback
 - [ ] 52. Daily EOD digest — signals fired, trades taken, P&L, data-coverage report
@@ -165,6 +165,16 @@ differentiator. This is another reason the recorder is urgent.
 
 Append one line per session. Keep it terse.
 
+- **2026-09-11 (6)** — All of Phase 5 (38-47) plus notifications 48-49.
+  Trade lifecycle is live end-to-end on paper: propose -> size -> entry gates ->
+  fill -> mark -> exit rules -> close -> journal, persisted at every step.
+  Sizing floors to whole lots, which matters more than it sounds: rounding 0.8
+  lots up to 1 silently takes ~25% more risk than the budget allows, every
+  time. Shorts are sized off stop distance, since collecting 50 of premium does
+  not mean risking 50. Paper fills deliberately reuse the backtester's cost
+  model so forward results stay comparable to backtest results. Telegram is the
+  first notification channel. LiveBroker exists but refuses to trade.
+  55 new tests; 184 pass. Frontend builds clean.
 - **2026-09-11 (5)** — Items 14, 16, 18, and all of Phases 2 and 3. The signal
   framework and backtester now exist end-to-end: replay -> signal -> labels ->
   matched null -> verdict. Validated on 4 synthetic sessions, and the validation
