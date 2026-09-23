@@ -5,3 +5,4 @@ apscheduler==3.10.4
 pandas==2.2.2
 pytest==8.3.2
 httpx==0.27.0
+tzdata==2026.4  # zoneinfo's IANA database; Windows ships none, so IST fails without it
