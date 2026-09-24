@@ -38,15 +38,16 @@ NSE_EOD_DB        = os.getenv("NSE_EOD_DB",        "nse_options_eod.db")
 #
 # lot_size here is only a FALLBACK. Read lot sizes through lot_sizes.lot_size_for,
 # which uses the per-contract sizes NSE publishes (loaded by bhavcopy.importer).
-# NSE revises them several times a year; NIFTY and BANKNIFTY below were checked
-# against exchange files in September 2026, the stock entries were not.
+# NSE revises them several times a year, and bonus issues and splits change them
+# too. All entries except ICICIBANK were checked against exchange files for
+# September 2026 contracts; every stock entry had drifted except that one.
 UNDERLYINGS = {
     "NIFTY":     {"symbol": "NSE:NIFTY50-INDEX",   "lot_size": 65,  "strike_step": 50},
     "BANKNIFTY": {"symbol": "NSE:NIFTYBANK-INDEX",  "lot_size": 30,  "strike_step": 100},
-    "RELIANCE":  {"symbol": "NSE:RELIANCE-EQ",      "lot_size": 250, "strike_step": 20},
-    "TCS":       {"symbol": "NSE:TCS-EQ",           "lot_size": 150, "strike_step": 25},
-    "HDFCBANK":  {"symbol": "NSE:HDFCBANK-EQ",      "lot_size": 550, "strike_step": 10},
-    "INFY":      {"symbol": "NSE:INFY-EQ",          "lot_size": 300, "strike_step": 20},
+    "RELIANCE":  {"symbol": "NSE:RELIANCE-EQ",      "lot_size": 500, "strike_step": 20},
+    "TCS":       {"symbol": "NSE:TCS-EQ",           "lot_size": 225, "strike_step": 25},
+    "HDFCBANK":  {"symbol": "NSE:HDFCBANK-EQ",      "lot_size": 650, "strike_step": 10},
+    "INFY":      {"symbol": "NSE:INFY-EQ",          "lot_size": 400, "strike_step": 20},
     "ICICIBANK": {"symbol": "NSE:ICICIBANK-EQ",     "lot_size": 700, "strike_step": 10},
 }
 

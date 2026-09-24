@@ -180,7 +180,10 @@ Append one line per session. Keep it terse.
   had more than one expiry. It now ranks 30-day constant-maturity IV as a
   percentile. Lot sizes come from exchange data per contract: config had NIFTY
   75 / BANKNIFTY 15 against 65 / 30, so trade sizing took twice the intended
-  risk on BANKNIFTY. 246 tests pass; frontend builds clean.
+  risk on BANKNIFTY. Every configured stock's lot size had also drifted except
+  ICICIBANK's, which is unverified: RELIANCE 250 -> 500, TCS 150 -> 225,
+  HDFCBANK 550 -> 650, INFY 300 -> 400. The 29 dates with no archive file all
+  match exchange holidays. 246 tests pass; frontend builds clean.
 
 - **2026-09-11 (6)** — All of Phase 5 (38-47) plus notifications 48-49.
   Trade lifecycle is live end-to-end on paper: propose -> size -> entry gates ->
@@ -258,11 +261,16 @@ Append one line per session. Keep it terse.
   adds the 2008 crash and March 2020. Weekly-expiry signals only have history
   from 2016 (BANKNIFTY) and 2019 (NIFTY).
 
-- **Stock IV history coverage.** Stocks list monthly expiries only and the
-  second month often barely trades, so trade-based history may lack a 30-day
-  reading on many dates. Live readings use bid-ask mids and are unaffected. If
-  coverage is poor, options are a single-expiry reading within a few days of 30,
-  or a different target tenor for monthly-only names.
+- **Stock IV history coverage — measured, acceptable.** Stocks list monthly
+  expiries only, so a 30-day reading needs the second month to trade. Over
+  540 dates the five configured stocks had a reading on 89-100% of them
+  (ICICIBANK 89%, RELIANCE 99.8%); FINNIFTY had almost none. Revisit only if
+  an unconfigured, thinner name is added.
+- **Highest readings are a real event.** NIFTY's 30-day IV peaks at 29.0% and
+  BANKNIFTY's at 32.5%, both on 2026-03-30, with the top six readings for NIFTY,
+  BANKNIFTY and INFY all falling between 2026-03-19 and 2026-04-06. A data fault
+  would be isolated to one day and one symbol. INFY's other top reading is
+  2025-04-07, the April 2025 global selloff. Worth confirming against India VIX.
 
 - **Exact CAS window end (15:30 vs 15:35)** — confirm against the NSE circular.
 - **Index options settlement under CAS** — index options aren't directly in CAS,
