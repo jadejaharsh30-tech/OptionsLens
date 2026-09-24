@@ -185,6 +185,21 @@ differentiator. This is another reason the recorder is urgent.
 
 Append one line per session. Keep it terse.
 
+- **2026-09-24 (10)** — Item 37 ported and the bhavcopy adapter built.
+  `signals/oi_buildup.py` reconstructs the alert engine's mutable
+  `pending_spikes` from the history window so the rule is pure and replayable;
+  its classifiers are re-implemented (the engine reaches a broker at module
+  scope) and tested against the engine's own across every quadrant. No verdict
+  yet — the recorder has ~1 session. `bhavcopy/snapshots.py` rebuilds exchange
+  EOD rows as `ChainSnapshot`s tagged `SessionPhase.END_OF_DAY`, materialised
+  into a SEPARATE database so one-per-day bars never interleave with the
+  recorder's one-per-minute bars. A rebuilt chain solves back to the vol it was
+  generated with, which is the real proof the adapter is faithful. 287 tests.
+  **Found doing it:** the forward-return labeller is intraday-shaped. On EOD
+  data every intraday horizon returns n=0 and `eod` is degenerate (entry bar and
+  last bar of the session are the same bar), so daily signals cannot be scored
+  until `backtest/labels.py` grows cross-session horizons. See open questions.
+
 - **2026-09-24 (9)** — Routine updates for exchange history. `--to today`, and a missing
   file from the last four days is retried instead of being recorded as a holiday (running
   the update before NSE published the day's file used to lose that day permanently).
@@ -267,6 +282,17 @@ Append one line per session. Keep it terse.
 ---
 
 ## Open questions / decisions to revisit
+
+- **Daily-horizon labels are missing, and they gate all EOD research.**
+  `backtest/labels.py` measures forward returns *within* a session (+5m/+15m/
+  +30m/+60m/EOD). Exchange EOD history has one bar per session, so every
+  intraday horizon scores n=0 and the EOD label compares a bar with itself.
+  The adapter delivers the snapshots correctly; the scoring layer is what is
+  intraday-only. Needs cross-session horizons (+1d, +5d, +20d) chosen in
+  advance like the existing ones, and a matched null drawn across sessions
+  rather than across clock times — time-of-day matching is meaningless when
+  every bar is the close. Until then items 30, 33 and 35 can be *built* on
+  EOD history but not *scored* on it.
 
 - **Found on the first Windows run (2026-09-24), still open:**
   - The term-structure chart (`routers/surface.py`) picks its own ATM IV (call IV, else

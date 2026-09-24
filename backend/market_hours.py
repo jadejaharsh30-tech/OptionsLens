@@ -55,6 +55,12 @@ class SessionPhase(str, Enum):
     CONTINUOUS  = "CONTINUOUS"    # 09:15-15:15 normal continuous trading
     CAS_WINDOW  = "CAS_WINDOW"    # 15:15-15:35 closing auction; cash stocks frozen
     POST_CAS    = "POST_CAS"      # 15:35-15:40 derivatives still trading
+    # Not produced by `get_session_phase` — it exists so a snapshot rebuilt from
+    # exchange end-of-day files is never mistaken for an intraday observation.
+    # EOD bars carry no bid/ask and one row per contract per day, so a signal
+    # can refuse them (or treat them differently) instead of silently reading a
+    # daily close as if it were a live quote.
+    END_OF_DAY  = "END_OF_DAY"
 
 
 def now_ist() -> datetime:
