@@ -134,7 +134,13 @@ differentiator. This is another reason the recorder is urgent.
 - [ ] 34. **CAS auction dislocation** — 15:15 price vs CAS equilibrium; new since Aug 2026, unexploited
 - [ ] 35. **Dispersion / implied correlation** — index IV vs cap-weighted constituent IV (we already have 5 constituents configured)
 - [ ] 36. Signal ensemble + conflict resolution
-- [ ] 37. Retire/replace the `SHORT_BUILDUP` heuristic once a measured signal beats it
+- [ ] 37. Retire/replace the `SHORT_BUILDUP` heuristic once a measured signal beats it.
+  First live run (2026-09-24) fired three BEARISH/BUY-PE alerts on NIFTY 23050-23150 CE
+  at 14:39-14:40 during an up-trending session. The rule reads "call OI up + call premium
+  down" as call writing, but four days before a weekly expiry the premium falls from theta
+  alone, and the index had just stalled after a rally. It also reports OI change against
+  a tiny prior-settle base (+2041%). Next step: port the rule into `signals/` and run it
+  through the backtester against the matched null on recorder data, not tune it by eye
 
 ### Phase 5 — Trade lifecycle & journal — COMPLETE
 
@@ -169,6 +175,12 @@ differentiator. This is another reason the recorder is urgent.
 
 Append one line per session. Keep it terse.
 
+- **2026-09-24 (8)** — First run on Windows, from the user's laptop, exposed three bugs
+  that Linux had hidden. Token validation always failed ("no running event loop": a sync
+  endpoint cannot create the recorder's asyncio task), so the recorder had never actually
+  auto-started; now async. `/api/ivrank` crashed on Windows via a dead `strftime("%s")`
+  line in `fetch_historical_prices`; removed. Two tests wrote to `/tmp`; now use the OS
+  temp dir. Recorder confirmed running live for the first time. 252 tests pass.
 - **2026-09-23 (7)** — Exchange EOD history and a corrected IV Rank. New
   `bhavcopy/` package: a stdlib-only NSE archive downloader (both schema eras,
   verified against live files) and an importer into the app's own stores.
@@ -241,6 +253,15 @@ Append one line per session. Keep it terse.
 ---
 
 ## Open questions / decisions to revisit
+
+- **Found on the first Windows run (2026-09-24), still open:**
+  - The term-structure chart (`routers/surface.py`) picks its own ATM IV (call IV, else
+    put IV, at the strike nearest spot) instead of `chain_pricing.atm_iv_for_chain`, so it
+    can disagree with IV Rank's per-expiry figures.
+  - Fyers load: the recorder, alert engine and dashboard now all poll at once. Watch for
+    rate-limit errors in the backend log before adding more pollers.
+  - Config `strike_step` for the stocks is unverified after bonus issues; only the alert
+    engine uses it. ICICIBANK's lot size is also unverified.
 
 - **IV history discontinuity.** `atm_iv_history` rows written before 2026-09-11
   were computed spot-based and sit ~1 vol point below forward-based values, so
