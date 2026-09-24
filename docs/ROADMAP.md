@@ -134,13 +134,23 @@ differentiator. This is another reason the recorder is urgent.
 - [ ] 34. **CAS auction dislocation** — 15:15 price vs CAS equilibrium; new since Aug 2026, unexploited
 - [ ] 35. **Dispersion / implied correlation** — index IV vs cap-weighted constituent IV (we already have 5 constituents configured)
 - [ ] 36. Signal ensemble + conflict resolution
-- [ ] 37. Retire/replace the `SHORT_BUILDUP` heuristic once a measured signal beats it.
+- [~] 37. Retire/replace the `SHORT_BUILDUP` heuristic once a measured signal beats it.
   First live run (2026-09-24) fired three BEARISH/BUY-PE alerts on NIFTY 23050-23150 CE
   at 14:39-14:40 during an up-trending session. The rule reads "call OI up + call premium
   down" as call writing, but four days before a weekly expiry the premium falls from theta
   alone, and the index had just stalled after a rally. It also reports OI change against
-  a tiny prior-settle base (+2041%). Next step: port the rule into `signals/` and run it
-  through the backtester against the matched null on recorder data, not tune it by eye
+  a tiny prior-settle base (+2041%).
+  **PORTED 2026-09-24** as `signals/oi_buildup.py` (`oi_short_buildup.v1`). The engine's
+  mutable `pending_spikes` is reconstructed from the history window, so the signal is pure
+  and replayable; `test_oi_buildup.py` asserts the classifiers match the live engine's
+  across every quadrant, since the signal re-implements rather than imports them (the
+  engine reaches a broker client at module scope).
+  Still OPEN: no verdict yet. The recorder only began collecting on 2026-09-24 (the
+  auth-validate bug had stopped it auto-starting), so there is ~1 session. On a synthetic
+  up-trending session with theta decay it fires on 96% of bars, always BEARISH, 0% hit
+  rate and mean -14.7 bps at 60m, with edge 0.00 against the null — the shape the live
+  false positive predicted, but synthetic data proves nothing about the market. Re-run
+  once real sessions accumulate
 
 ### Phase 5 — Trade lifecycle & journal — COMPLETE
 

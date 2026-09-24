@@ -14,6 +14,10 @@ from signals.base import Direction, Signal, SignalContext, SignalResult
 from signals.features import compute_features, gex_by_strike
 from signals.registry import register_signal
 
+# Registers the ported alert-engine rule (roadmap item 37). Imported for its
+# side effect; the signal itself lives in its own module because it is large.
+import signals.oi_buildup  # noqa: F401,E402
+
 
 @register_signal(
     "gex_regime",
