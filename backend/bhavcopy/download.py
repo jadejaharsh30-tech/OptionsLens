@@ -25,6 +25,11 @@ Usage (from backend/, or with this file copied anywhere):
     python3 -m bhavcopy.download --from 2024-07-08 --to 2026-09-10 --stocks --symbols NIFTY,BANKNIFTY,RELIANCE
     python3 -m bhavcopy.download --report
 
+Keeping it current: rerun the same command with --to today. Dates already
+downloaded are skipped without touching the network, so only new days are
+fetched. Today's file appears in the evening; a date from the last few days
+that is not published yet is retried on the next run, never marked a holiday.
+
 The database path defaults to $NSE_EOD_DB, falling back to nse_options_eod.db
 in the working directory. Load the result into the app with bhavcopy.importer.
 
@@ -53,7 +58,7 @@ import sqlite3
 import sys
 import time
 import zipfile
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -61,6 +66,14 @@ from urllib.request import Request, urlopen
 UDIFF_START = date(2024, 7, 8)
 
 DEFAULT_DB = os.getenv("NSE_EOD_DB", "nse_options_eod.db")
+
+# A fixed offset rather than zoneinfo: India has no DST, and zoneinfo needs the
+# tzdata package on Windows, which this stdlib-only script must not require.
+IST = timezone(timedelta(hours=5, minutes=30))
+
+# A missing file this recent may simply not be published yet, so it is left
+# unrecorded and retried on the next run. Older 404s are holidays.
+PENDING_DAYS = 4
 
 HEADERS = {
     "User-Agent": (
@@ -361,6 +374,11 @@ def ingest_day(conn: sqlite3.Connection, day: date, symbols: set[str] | None,
 
     payload = fetch(url)
     if payload is None:
+        # NSE publishes each day's file in the evening. Recording a not-yet-
+        # published day as a holiday would skip it on every later run, so a
+        # recent 404 is left unlogged and retried next time.
+        if (today_ist() - day).days < PENDING_DAYS:
+            return "pending", 0, 0
         log(conn, day, era, url, "no_file", note="404 — holiday or non-trading day")
         return "no_file", 0, 0
 
@@ -398,7 +416,7 @@ def ingest_day(conn: sqlite3.Connection, day: date, symbols: set[str] | None,
 def run(conn: sqlite3.Connection, start: date, end: date, symbols: set[str] | None,
         include_stocks: bool, pause: float, force: bool = False) -> None:
     day = start
-    stats = {"ok": 0, "no_file": 0, "skipped": 0, "error": 0}
+    stats = {"ok": 0, "no_file": 0, "skipped": 0, "error": 0, "pending": 0}
     total_opt = total_fut = 0
 
     while day <= end:
@@ -426,6 +444,8 @@ def run(conn: sqlite3.Connection, start: date, end: date, symbols: set[str] | No
             print(f"{day}  {era_for(day):<6}  options {n_opt:>7,}  futures {n_fut:>5,}")
         elif status == "no_file":
             print(f"{day}  {era_for(day):<6}  no file (holiday)")
+        elif status == "pending":
+            print(f"{day}  {era_for(day):<6}  not published yet — will retry next run")
         else:
             print(f"{day}  {era_for(day):<6}  ERROR — see ingest_log")
 
@@ -436,6 +456,8 @@ def run(conn: sqlite3.Connection, start: date, end: date, symbols: set[str] | No
     print(f"days ingested   {stats['ok']:,}")
     print(f"days skipped    {stats['skipped']:,}  (already in the database)")
     print(f"non-trading     {stats['no_file']:,}")
+    if stats["pending"]:
+        print(f"not yet public  {stats['pending']:,}  (recent dates, retried next run)")
     print(f"errors          {stats['error']:,}")
     print(f"option rows     {total_opt:,}")
     print(f"future rows     {total_fut:,}")
@@ -507,11 +529,18 @@ def report(conn: sqlite3.Connection) -> None:
 
 # ── cli ──────────────────────────────────────────────────────────────────────
 
+def today_ist() -> date:
+    return datetime.now(IST).date()
+
+
 def parse_day(text: str) -> date:
+    """YYYY-MM-DD, or 'today' (the IST date), so a routine update is one fixed command."""
+    if text.strip().lower() == "today":
+        return today_ist()
     try:
         return datetime.strptime(text, "%Y-%m-%d").date()
     except ValueError:
-        raise argparse.ArgumentTypeError(f"{text!r} is not YYYY-MM-DD")
+        raise argparse.ArgumentTypeError(f"{text!r} is not YYYY-MM-DD or 'today'")
 
 
 def main() -> int:

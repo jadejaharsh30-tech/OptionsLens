@@ -175,6 +175,10 @@ differentiator. This is another reason the recorder is urgent.
 
 Append one line per session. Keep it terse.
 
+- **2026-09-24 (9)** — Routine updates for exchange history. `--to today`, and a missing
+  file from the last four days is retried instead of being recorded as a holiday (running
+  the update before NSE published the day's file used to lose that day permanently).
+  Runbook in `docs/BHAVCOPY.md`. 256 tests pass.
 - **2026-09-24 (8)** — First run on Windows, from the user's laptop, exposed three bugs
   that Linux had hidden. Token validation always failed ("no running event loop": a sync
   endpoint cannot create the recorder's asyncio task), so the recorder had never actually
