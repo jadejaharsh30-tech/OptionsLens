@@ -48,7 +48,10 @@ def start_recorder(token: str, cfg: Optional[RecorderConfig] = None) -> bool:
     """
     global _recorder_handle
 
-    if recorder_state.running:
+    # The handle check matters as much as the flag: `running` is only set once
+    # the task first executes, so two validations arriving together (the
+    # dashboard sends a pair on load) would otherwise both start a recorder.
+    if recorder_state.running or (_recorder_handle is not None and not _recorder_handle.done()):
         return False
 
     cfg = cfg or RecorderConfig()

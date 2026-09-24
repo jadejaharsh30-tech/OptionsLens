@@ -9,6 +9,7 @@ Run with:
 API docs (auto-generated):
     http://localhost:8000/docs
 """
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException
@@ -31,6 +32,7 @@ from routers.ivrank       import router as ivrank_router
 from routers.position_lab import router as position_lab_router
 from routers.alert_engine import router as alert_engine_router
 from routers.recorder     import router as recorder_router, start_recorder
+from recorder.service import recorder_state
 from routers.backtest     import router as backtest_router
 from routers.trades       import router as trades_router
 from routers.notifications import router as notify_router
@@ -95,32 +97,46 @@ def health():
 
 
 @app.get("/api/auth/validate", tags=["auth"])
-def validate_token(token: str = Depends(get_token)):
+async def validate_token(token: str = Depends(get_token)):
     """
     Validates a Fyers access token by fetching a live Nifty quote.
     Also registers the token for the daily 15:10 IST IV snapshot job.
     Call this once each morning after pasting your token.
+
+    Async on purpose. Auto-starting the recorder creates an asyncio task, which
+    needs the running event loop; as a plain `def` this endpoint ran in a worker
+    thread with no loop, so every validation failed with "no running event
+    loop" and was reported as an invalid token. The blocking Fyers call goes
+    through to_thread so it still does not stall the loop.
     """
     try:
         fyers = get_fyers(token)
-        nifty_ltp = fetch_quote(fyers, "NIFTY")
-        register_token(token)
-
-        # Auto-start the chain recorder. Intraday per-strike OI cannot be
-        # bought back retroactively, so recording must not depend on the user
-        # remembering to press a button each morning.
-        recorder_started = start_recorder(token)
-
-        logger.info(f"Token validated. NIFTY LTP: {nifty_ltp}")
-        return {
-            "valid":            True,
-            "nifty_ltp":        nifty_ltp,
-            "recorder_started": recorder_started,
-            "message":          "Token valid. Registered for daily IV snapshot at "
-                                "15:10 IST. Chain recorder running.",
-        }
+        nifty_ltp = await asyncio.to_thread(fetch_quote, fyers, "NIFTY")
     except Exception as e:
         raise HTTPException(status_code=401, detail=str(e))
+
+    register_token(token)
+
+    # Auto-start the chain recorder. Intraday per-strike OI cannot be bought
+    # back retroactively, so recording must not depend on the user remembering
+    # to press a button each morning. A recorder failure is logged, not turned
+    # into a 401: the token is valid, and the dashboard should still open.
+    try:
+        recorder_started = start_recorder(token)
+    except Exception as e:
+        logger.error(f"Recorder auto-start failed: {e!r}")
+        recorder_started = False
+
+    logger.info(f"Token validated. NIFTY LTP: {nifty_ltp}")
+    return {
+        "valid":            True,
+        "nifty_ltp":        nifty_ltp,
+        "recorder_started": recorder_started,
+        "message":          "Token valid. Registered for daily IV snapshot at 15:10 IST. "
+                            + ("Chain recorder started." if recorder_started else
+                               "Chain recorder already running." if recorder_state.running else
+                               "Chain recorder not started; see backend log."),
+    }
 
 
 @app.get("/api/symbols", tags=["meta"])
