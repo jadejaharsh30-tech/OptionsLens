@@ -26,7 +26,7 @@ python -m pytest tests/test_iv_engine.py             # one file
 python -m pytest tests/test_iv_engine.py -k parity   # one test by keyword
 ```
 
-246 tests, none needing a Fyers token or network: the engines, `chain_pricing`, `market_hours`, `recorder`, `snapshot_store`, `eod_vol`, `lot_sizes`, `bhavcopy` (importer end to end on a synthetic Black-76 archive), `signals`/`backtest`, `trading`, `notify`, `alert_engine/percentile_threshold`. `/api/ivrank` is the only router under test (fake broker via monkeypatch + `dependency_overrides`); the rest and `fyers_client` are roadmap item 54.
+252 tests, none needing a Fyers token or network: the engines, `chain_pricing`, `market_hours`, `recorder`, `snapshot_store`, `eod_vol`, `lot_sizes`, `bhavcopy` (importer end to end on a synthetic Black-76 archive), `signals`/`backtest`, `trading`, `notify`, `alert_engine/percentile_threshold`. `/api/ivrank` is the only router under test (fake broker via monkeypatch + `dependency_overrides`); the rest and `fyers_client` are roadmap item 54.
 
 ### Frontend (run from `frontend/`)
 
@@ -115,9 +115,8 @@ closes that now come from CAS. Consequences encoded in `market_hours.py`:
 
 - `IV_SOLVER_*` constants in `config.py` are never imported; the real defaults live in `iv_engine.py` (`IV_LOWER_BOUND`, `IV_UPPER_BOUND`, `MIN_VEGA`, `BISECTION_MAX_ITER`).
 - In-memory-only state lost on restart: the snapshot token (`scheduler.py`), the alert-engine task handle, and the recorder task handle. A restart mid-session stops recording until the token is validated again.
-- `fetch_historical_prices` (fyers_client.py) has a dead, broken epoch computation immediately overwritten by the correct one.
 - Alert-engine comments reference `app_v2_final.py` (the original Streamlit app it was ported from) — that file is not in the repo.
-- README drift: it describes 3 modules (the Alert Engine page/package, SVI interpolation, realized vol, max pain, PCR are missing), says "36 unit tests" (now 246), uses `cd optionslens/backend` paths (actual: `backend/` at repo root), and references a `fyers_login_test.py` that isn't committed.
+- README drift: it describes 3 modules (the Alert Engine page/package, SVI interpolation, realized vol, max pain, PCR are missing), says "36 unit tests" (now 252), uses `cd optionslens/backend` paths (actual: `backend/` at repo root), and references a `fyers_login_test.py` that isn't committed.
 - `realized_vol.compute_rv_series` invents its dates by counting weekdays back from today, ignoring holidays, so `/api/ivrank`'s IV-vs-RV series pairs each IV date with an RV a day or two off after every holiday. `spot_history` now holds real dated closes from the bhavcopy import and could replace it.
 - GEX multiplies OI by lot size. Exchange files report OI in shares; if Fyers does too, GEX is overstated by the lot size (a scale factor only — the flip level is unaffected). Not yet verified against a live Fyers response.
 - Monthly-only contracts can have an untraded second month, which leaves no 30-day reading from bhavcopy history on those dates. Measured over 2024-07 to 2026-09: FINNIFTY had almost none, while the five configured stocks had 89-100% of dates covered (ICICIBANK lowest). The importer's "CM30 days" column reports it per symbol.

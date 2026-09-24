@@ -6,7 +6,7 @@ One FyersModel instance per request (stateless — token passed each time).
 NOTE: Fyers returns expiry dates in DD-MM-YYYY format (e.g. "24-04-2025").
       All date parsing in this project uses "%d-%m-%Y".
 """
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from fyers_apiv3 import fyersModel
 from config import UNDERLYINGS
 
@@ -107,13 +107,11 @@ def fetch_historical_prices(fyers, symbol_key: str, days: int = 90) -> list[floa
     """
     cfg        = UNDERLYINGS[symbol_key]
     today      = date.today()
-    range_from = int((today - timedelta(days=days)).strftime("%s")
-                     if hasattr(today, 'strftime') else
-                     (today - timedelta(days=days)).timetuple())
 
-    # Cross-platform epoch calculation
-    import time
-    from datetime import datetime
+    # datetime.timestamp() is portable. An earlier strftime("%s") computation
+    # sat above this: "%s" is a glibc extension, so it raised ValueError on
+    # Windows and took /api/ivrank down with it, while on Linux its result was
+    # immediately overwritten here.
     start_dt   = datetime.combine(today - timedelta(days=days), datetime.min.time())
     end_dt     = datetime.combine(today, datetime.min.time())
     range_from = int(start_dt.timestamp())
