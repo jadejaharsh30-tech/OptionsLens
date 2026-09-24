@@ -1,7 +1,7 @@
-import sys, os, sqlite3
+import sys, os, sqlite3, tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-TEST_DB = "/tmp/test_percentile.db"
+TEST_DB = os.path.join(tempfile.gettempdir(), "test_percentile.db")  # /tmp does not exist on Windows
 
 
 def _init_test_db(db_path):

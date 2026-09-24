@@ -1,8 +1,8 @@
-import sys, os
+import sys, os, tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 # Use isolated test DB — never touches production DB
-TEST_DB = "/tmp/test_optionslens.db"
+TEST_DB = os.path.join(tempfile.gettempdir(), "test_optionslens.db")  # /tmp does not exist on Windows
 
 # Patch DB_PATH before import
 import config
