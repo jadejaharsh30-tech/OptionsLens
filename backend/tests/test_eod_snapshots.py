@@ -25,8 +25,19 @@ from bhavcopy.snapshots import (  # noqa: E402
 from chain_pricing import atm_iv_for_chain, price_for_iv  # noqa: E402
 from iv_engine import black76_price  # noqa: E402
 from market_hours import SessionPhase, time_to_expiry  # noqa: E402
+from signals.base import Direction, Signal, SignalResult  # noqa: E402
+from signals.registry import register_signal  # noqa: E402
 
 R, SIGMA = 0.065, 0.16
+
+
+@register_signal("eod_probe", version=1, min_history=0)
+def _eod_probe(ctx):
+    """Directional, fires every bar — the mode choice is what is under test."""
+    return SignalResult.fire(Signal(
+        signal_id="eod_probe", version=1, ts=ctx.ts, symbol=ctx.symbol,
+        direction=Direction.BULLISH, strength=0.5,
+    ))
 
 ARCHIVE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS daily_option (
@@ -282,7 +293,7 @@ def test_backtester_runs_over_materialised_eod_history():
         materialize("NIFTY", dest, src_db=src)
         init_sig(dest)
 
-        run = run_backtest("gex_regime", "NIFTY", db_path=dest)
+        run = run_backtest("eod_probe", "NIFTY", db_path=dest)
         out = run.to_dict()
         assert out["sessions"] == len(dates)
         assert out["evaluations"] == len(dates)   # one EOD bar per session

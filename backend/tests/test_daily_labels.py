@@ -25,7 +25,11 @@ from backtest.labels import (  # noqa: E402
 SYM = "NIFTY"
 
 
-@register_signal("intraday_probe", version=1, min_history=1)
+# min_history=0 on purpose: `replay_session` builds its history window WITHIN a
+# session, so one-bar-per-session data never accumulates any. Cross-session
+# history windows are an open roadmap item; a daily signal needing prior bars
+# currently has to receive them through `extras`, as the VRP signal does.
+@register_signal("intraday_probe", version=1, min_history=0)
 def _intraday_probe(ctx):
     """Fires on every bar, so mode selection is what is being tested."""
     return SignalResult.fire(Signal(
@@ -201,9 +205,12 @@ def test_engine_picks_daily_mode_from_the_data():
 
     db = _one_bar_per_session_db()
     try:
-        run = run_backtest("gex_regime", SYM, db_path=db)
+        # A DIRECTIONAL signal: gex_regime emits SHORT_VOL/LONG_VOL and is
+        # therefore scored on vol outcomes, not on daily direction.
+        run = run_backtest("intraday_probe", SYM, db_path=db)
         out = run.to_dict()
         assert out["label_mode"] == "daily"
+        assert out["unit"] == "bps"
         assert set(out["horizons"]) == {"1d", "5d", "20d"}
         assert any("weekday" in n for n in out["notes"])
     finally:
@@ -263,7 +270,7 @@ def test_explicit_mode_overrides_detection():
 
     db = _one_bar_per_session_db()
     try:
-        out = run_backtest("gex_regime", SYM, db_path=db,
+        out = run_backtest("intraday_probe", SYM, db_path=db,
                            label_mode="intraday").to_dict()
         assert out["label_mode"] == "intraday"
     finally:

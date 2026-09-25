@@ -23,6 +23,10 @@ from backtest.labels import (
     ForwardReturns, compute_daily_forward_returns, compute_forward_returns,
     daily_horizon_keys, horizon_keys,
 )
+from backtest.vol_labels import (
+    VOL_DIRECTIONS, build_vol_null_labels, compute_vol_outcome,
+    iv_by_date_from_extras, vol_horizon_keys,
+)
 from backtest.metrics import BacktestStats, horizon_stats, interpret
 from backtest.replay import replay_range
 from market_hours import IST
@@ -46,6 +50,9 @@ class BacktestRun:
     n_evaluations: int
     n_signals:     int
     label_mode:    str = "intraday"
+    # "bps" for directional signals, "vol_points" for volatility ones. The
+    # numbers are not comparable across the two, so the unit travels with them.
+    unit:          str = "bps"
     stats:         Optional[BacktestStats] = None
     comparison:    dict[str, BenchmarkComparison] = field(default_factory=dict)
     notes:         list[str] = field(default_factory=list)
@@ -63,6 +70,7 @@ class BacktestRun:
             "evaluations":   self.n_evaluations,
             "signals_fired": self.n_signals,
             "label_mode":    self.label_mode,
+            "unit":          self.unit,
             "fire_rate_pct": round(self.n_signals / self.n_evaluations * 100, 2)
                              if self.n_evaluations else 0.0,
             "generated_at":  self.generated_at,
@@ -109,7 +117,8 @@ def run_backtest(
 
     all_results = []
     session_series: dict[str, tuple[list[str], list[float]]] = {}
-    fired_entries: list[tuple[str, str, int]] = []   # (session_date, ts, direction)
+    # (session_date, ts, sign, direction_name)
+    fired_entries: list[tuple[str, str, int, str]] = []
 
     for replay in replay_range(spec, symbol, dates, params, history_window,
                                db_path=db_path, extras=extras):
@@ -119,8 +128,9 @@ def run_backtest(
         all_results.extend(replay.results)
 
         for res in replay.fired:
-            direction = -1 if (res.signal and res.signal.direction in _SHORT_DIRECTIONS) else 1
-            fired_entries.append((replay.session_date, res.ts, direction))
+            name = res.signal.direction.value if res.signal else "NEUTRAL"
+            sign = -1 if (res.signal and res.signal.direction in _SHORT_DIRECTIONS) else 1
+            fired_entries.append((replay.session_date, res.ts, sign, name))
 
     if persist_evaluations and all_results:
         write_evaluations(all_results, run_id=run_id, params=params or {},
@@ -131,9 +141,20 @@ def run_backtest(
     # would all score n=0 and the EOD label would compare a bar with itself.
     # Detected from the data rather than configured, so a caller cannot score
     # daily bars on intraday horizons by forgetting a flag.
+    # A volatility signal is scored on vol, whatever the bar frequency: its
+    # payoff is realised vol against the implied level at entry, and signed
+    # underlying return cannot express that. Read from the fired signals'
+    # direction rather than a flag, so the wrong target cannot be selected by
+    # forgetting an argument.
+    vol_family = bool(fired_entries) and all(
+        name in VOL_DIRECTIONS for _, _, _, name in fired_entries)
+
     if label_mode == "auto":
-        one_bar_sessions = all(len(ts) == 1 for ts, _ in session_series.values())
-        resolved_mode = "daily" if (one_bar_sessions and session_series) else "intraday"
+        if vol_family:
+            resolved_mode = "vol"
+        else:
+            one_bar_sessions = all(len(ts) == 1 for ts, _ in session_series.values())
+            resolved_mode = "daily" if (one_bar_sessions and session_series) else "intraday"
     else:
         resolved_mode = label_mode
 
@@ -158,7 +179,15 @@ def run_backtest(
         )
         return run
 
-    if resolved_mode == "daily":
+    if resolved_mode == "vol":
+        signal_labels, null_labels, horizons, note = _label_vol(
+            fired_entries, session_series, symbol,
+            null_samples_per_signal, seed, extras,
+        )
+        run.unit = "vol_points"
+        if note:
+            run.notes.append(note)
+    elif resolved_mode == "daily":
         signal_labels, null_labels, horizons = _label_daily(
             fired_entries, session_series, symbol,
             null_samples_per_signal, seed,
@@ -199,6 +228,13 @@ def run_backtest(
             "Daily labelling: horizons count trading sessions, and the null is "
             "matched on weekday so the weekly expiry cycle is controlled for."
         )
+    elif resolved_mode == "vol":
+        run.notes.append(
+            "Vol labelling: values are VOL POINTS of implied minus subsequently "
+            "realised, signed so positive means the signal was right. The "
+            "20-session horizon is the one tenor-matched to a 30-day implied; "
+            "shorter ones ask a weaker question about near-term vol."
+        )
 
     if len(run.session_dates) < 20:
         run.notes.append(
@@ -218,7 +254,7 @@ def _label_intraday(fired_entries, session_series, symbol,
     signal_labels: list[ForwardReturns] = []
     direction_by_ts: dict[str, int] = {}
 
-    for session_date, ts, direction in fired_entries:
+    for session_date, ts, direction, _name in fired_entries:
         timestamps, spots = session_series[session_date]
         try:
             idx = timestamps.index(ts)
@@ -255,7 +291,7 @@ def _label_daily(fired_entries, session_series, symbol,
     signal_labels: list[ForwardReturns] = []
     directions: list[int] = []
 
-    for session_date, _ts, direction in fired_entries:
+    for session_date, _ts, direction, _name in fired_entries:
         idx = index_of_date.get(session_date)
         if idx is None:
             continue
@@ -265,7 +301,7 @@ def _label_daily(fired_entries, session_series, symbol,
             symbol=symbol, direction=direction,
         ))
 
-    signal_indices = [index_of_date[d] for d, _, _ in fired_entries
+    signal_indices = [index_of_date[d] for d, _, _, _ in fired_entries
                       if d in index_of_date]
     picks = sample_null_sessions(
         signal_indices     = signal_indices,
@@ -278,3 +314,59 @@ def _label_daily(fired_entries, session_series, symbol,
     null_labels = build_daily_null_labels(picks, dates, closes, symbol,
                                           null_directions)
     return signal_labels, null_labels, daily_horizon_keys()
+
+
+def _label_vol(fired_entries, session_series, symbol,
+               null_samples_per_signal, seed, extras):
+    """
+    Vol-outcome horizons, null matched on weekday.
+
+    The null is the load-bearing column here. The variance risk premium is
+    positive most of the time, so a short-vol signal winning 70% of the time may
+    only be collecting what was available on any random day. Comparing against
+    weekday-matched random entries labelled the same way is what separates
+    "this signal picks its moments" from "vol is usually overpriced".
+    """
+    dates = sorted(session_series)
+    closes = [session_series[d][1][-1] for d in dates]
+    index_of_date = {d: i for i, d in enumerate(dates)}
+
+    iv_by_date = iv_by_date_from_extras(extras)
+    if not iv_by_date:
+        return [], [], vol_horizon_keys(), (
+            "No IV series supplied, so vol outcomes cannot be measured. Pass "
+            "extras={'iv_series': [{'date','iv'}]} (vrp.load_vrp_history output "
+            "works) to score a volatility signal."
+        )
+
+    signal_labels: list[ForwardReturns] = []
+    directions: list[str] = []
+    signal_indices: list[int] = []
+
+    for session_date, _ts, _sign, name in fired_entries:
+        idx = index_of_date.get(session_date)
+        if idx is None:
+            continue
+        lab = compute_vol_outcome(idx, dates, closes, iv_by_date, symbol, name)
+        if lab is None:
+            continue
+        signal_labels.append(lab)
+        directions.append(name)
+        signal_indices.append(idx)
+
+    if not signal_labels:
+        return [], [], vol_horizon_keys(), (
+            "Signals fired but none of their dates carried an entry IV, so no "
+            "vol outcome could be computed."
+        )
+
+    picks = sample_null_sessions(
+        signal_indices     = signal_indices,
+        dates              = dates,
+        samples_per_signal = null_samples_per_signal,
+        seed               = seed,
+    )
+    null_directions = [d for d in directions for _ in range(null_samples_per_signal)]
+    null_labels = build_vol_null_labels(picks, dates, closes, iv_by_date,
+                                        symbol, null_directions)
+    return signal_labels, null_labels, vol_horizon_keys(), None

@@ -187,6 +187,14 @@ differentiator. This is another reason the recorder is urgent.
 
 Append one line per session. Keep it terse.
 
+- **2026-09-25 (13)** — Vol-outcome labelling, so volatility signals can finally
+  be scored on volatility. `vol_labels.py` measures implied at entry against vol
+  realised AFTERWARDS - deliberately not the contemporaneous spread the VRP
+  signal reads as input, which would be circular. Mode is chosen from the fired
+  signals' direction. Note `gex_regime` emits SHORT_VOL/LONG_VOL and is now
+  scored on vol too, which is the right target for a dealer-gamma-regime signal.
+  342 tests pass.
+
 - **2026-09-25 (12)** — Item 30 built, and the RV dating bug fixed.
   `rv_series_from_dated_closes` takes dated closes from `spot_history` instead
   of reconstructing dates by counting weekdays back from today, which ignored
@@ -308,17 +316,31 @@ Append one line per session. Keep it terse.
 
 ## Open questions / decisions to revisit
 
-- **Vol signals need a vol outcome, not a directional one.** `backtest/labels.py`
-  measures signed underlying return at every horizon. That is right for BULLISH
-  and BEARISH signals and meaningless for SHORT_VOL and LONG_VOL: a short-vol
-  position pays when realised volatility comes in below the implied level it was
-  sold at, whichever way the index moves. Until this exists, item 30's NO_EDGE
-  verdict says only that VRP does not predict direction, which was never the
-  claim, and items 33 and 36 inherit the same problem.
-  What it needs: a label of realised vol over the horizon versus the IV at
-  entry (a vol-points miss), and a null drawn the same way. The direction enum
-  already separates the two families, so `run_backtest` can pick the labeller
-  from the fired signal's direction rather than needing a new flag.
+- ~~Vol signals need a vol outcome~~ **DONE 2026-09-25.** `backtest/vol_labels.py`
+  scores SHORT_VOL / LONG_VOL by (IV at entry - subsequently realised vol) in
+  VOL POINTS, signed so positive always means the signal was right. Horizons
+  5/10/20 sessions; the 20-session one is tenor-matched to a 30-day implied and
+  is the honest headline. The mode is read from the fired signals' direction,
+  not a flag. `BacktestRun.unit` carries "bps" or "vol_points" so the two are
+  never read as comparable.
+  **Methodological caution found while validating it, and it applies to REAL
+  results too:** implied vol sits on BOTH sides of a VRP test - in the signal
+  input (IV minus trailing RV) and in the outcome (IV minus future RV). That
+  shared component makes a synthetic null very hard to construct, and it means a
+  genuine backtest can show edge partly because wide premiums mean-revert rather
+  than because the signal times anything. Validation: a fixture where rich
+  premiums genuinely precede calm scored +12.43 vol points (t=18.85); a fixture
+  with constant IV, where a high VRP only means trailing vol was low, correctly
+  returned NO_EDGE with a slightly NEGATIVE edge at 5d. The labeller
+  discriminates and is not biased toward finding edge.
+
+- **History windows do not span sessions.** `replay_session` accumulates its
+  window within one session, so on one-bar-per-session EOD data `ctx.history` is
+  always empty and any `min_history` above zero skips forever. VRP works because
+  it takes its series through `extras`, but a daily signal wanting prior BARS
+  (term-structure change, OI trend) has no route to them. Fix is to seed the
+  window from prior sessions in `replay_range`, keeping the append-after-
+  evaluation rule that makes look-ahead impossible.
 
 - ~~Daily-horizon labels are missing~~ **DONE 2026-09-25.** `+1d/+5d/+20d`
   counting trading sessions (so a holiday cannot silently shorten a horizon),
