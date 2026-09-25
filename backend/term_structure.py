@@ -204,3 +204,36 @@ def coverage(db_path: str, symbol: str, days: int = 504,
         "far_leg_coverage_pct": round(len(both) / len(near_dates) * 100, 1)
                                 if near_dates else 0.0,
     }
+
+
+def _report() -> None:
+    """
+    `python -m term_structure` — coverage per configured underlying.
+
+    The question to answer before reading any term-structure backtest: does the
+    60-day leg exist often enough for its percentile to mean anything? Printed
+    as a table for the same reason the bhavcopy importer prints one — a number
+    you have to write a query for is a number nobody checks.
+    """
+    from config import DB_PATH, UNDERLYINGS
+
+    print(f"{'symbol':<12}{'30d dates':>11}{'60d dates':>11}{'paired':>9}"
+          f"{'far leg':>9}  {'inverted':>9}  window")
+    for symbol in UNDERLYINGS:
+        cov = coverage(DB_PATH, symbol)
+        series = load_term_structure_history(DB_PATH, symbol)
+        info = summarise(series)
+        window = (f"{info['first_date']} to {info['last_date']}"
+                  if series else "-")
+        print(f"{symbol:<12}{cov['near_dates']:>11}{cov['far_dates']:>11}"
+              f"{cov['paired']:>9}{cov['far_leg_coverage_pct']:>8.1f}%"
+              f"{(info.get('pct_inverted', 0.0)):>10.1f}%  {window}")
+
+    print(f"\nA percentile needs {MIN_OBSERVATIONS} paired observations before "
+          f"term_structure will fire at all.\nLow far-leg coverage means the "
+          f"series is conditioned on the far month having traded,\nwhich is "
+          f"not the same population as 'all sessions'.")
+
+
+if __name__ == "__main__":
+    _report()

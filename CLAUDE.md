@@ -24,6 +24,8 @@ uvicorn main:app --reload --port 8000    # API docs at http://localhost:8000/doc
 python -m pytest tests/                              # all tests
 python -m pytest tests/test_iv_engine.py             # one file
 python -m pytest tests/test_iv_engine.py -k parity   # one test by keyword
+
+python -m term_structure                 # 30d/60d leg coverage per underlying
 ```
 
 417 tests, none needing a Fyers token or network: the engines, `chain_pricing`, `market_hours`, `recorder`, `snapshot_store`, `eod_vol`, `lot_sizes`, `bhavcopy` (importer end to end on a synthetic Black-76 archive), `signals`/`backtest`, `term_structure`/`skew`, `trading`, `notify`, `alert_engine/percentile_threshold`. Routers are covered by `test_routers.py` (fake broker via monkeypatch + `dependency_overrides`, module-scoped client because the lifespan starts a scheduler); `fyers_client` itself is still untested.
