@@ -185,6 +185,17 @@ differentiator. This is another reason the recorder is urgent.
 
 Append one line per session. Keep it terse.
 
+- **2026-09-25 (11)** — Cross-session labelling, which unblocks all EOD research.
+  `HORIZONS_DAYS = (1, 5, 20)` counted in trading sessions, a weekday-matched
+  null (`sample_null_sessions`), and mode selection driven by the data rather
+  than a flag. On EOD-shaped history the backtester previously scored n=0 at
+  every horizon with a degenerate self-comparing EOD label; it now returns real
+  1d/5d/20d statistics against a matched null. 301 tests pass.
+  Note for future sessions: importing a fixture from another test module
+  re-executes its `@register_signal` decorators under a second module identity
+  (pytest imports test files without a package prefix) and trips the registry's
+  duplicate guard only when the whole suite runs. Keep test fixtures local.
+
 - **2026-09-24 (10)** — Item 37 ported and the bhavcopy adapter built.
   `signals/oi_buildup.py` reconstructs the alert engine's mutable
   `pending_spikes` from the history window so the rule is pure and replayable;
@@ -283,16 +294,17 @@ Append one line per session. Keep it terse.
 
 ## Open questions / decisions to revisit
 
-- **Daily-horizon labels are missing, and they gate all EOD research.**
-  `backtest/labels.py` measures forward returns *within* a session (+5m/+15m/
-  +30m/+60m/EOD). Exchange EOD history has one bar per session, so every
-  intraday horizon scores n=0 and the EOD label compares a bar with itself.
-  The adapter delivers the snapshots correctly; the scoring layer is what is
-  intraday-only. Needs cross-session horizons (+1d, +5d, +20d) chosen in
-  advance like the existing ones, and a matched null drawn across sessions
-  rather than across clock times — time-of-day matching is meaningless when
-  every bar is the close. Until then items 30, 33 and 35 can be *built* on
-  EOD history but not *scored* on it.
+- ~~Daily-horizon labels are missing~~ **DONE 2026-09-25.** `+1d/+5d/+20d`
+  counting trading sessions (so a holiday cannot silently shorten a horizon),
+  with a null matched on WEEKDAY rather than clock time — clock matching is
+  meaningless when every bar is a close, and weekday captures the weekly expiry
+  cycle empirically without hardcoding a rule NSE has already changed once.
+  The engine picks the mode from the data (one bar per session -> daily), not
+  from a flag, so daily bars cannot be scored on intraday horizons by mistake.
+  `label_mode` can still be forced. Items 30, 33 and 35 are now scoreable on
+  EOD history.
+  Remaining nuance: days-to-expiry would be a sharper match than weekday, but
+  needs an expiry calendar the labels do not carry.
 
 - **Found on the first Windows run (2026-09-24), still open:**
   - The term-structure chart (`routers/surface.py`) picks its own ATM IV (call IV, else

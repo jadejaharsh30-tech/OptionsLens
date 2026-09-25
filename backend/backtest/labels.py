@@ -21,6 +21,14 @@ from typing import Optional
 HORIZONS_MIN = (5, 15, 30, 60)
 EOD_LABEL = "eod"
 
+# Cross-session horizons, in trading sessions, for daily-frequency data.
+#
+# Exchange EOD history carries one bar per session, so every intraday horizon
+# scores n=0 against it and the EOD label compares a bar with itself. Daily
+# signals (VRP, term structure, dispersion) need returns measured ACROSS
+# sessions instead. Fixed in advance for the same reason the intraday ones are.
+HORIZONS_DAYS = (1, 5, 20)
+
 
 @dataclass
 class ForwardReturns:
@@ -116,3 +124,62 @@ def compute_forward_returns(
 
 def horizon_keys(horizons_min: tuple[int, ...] = HORIZONS_MIN) -> list[str]:
     return [f"{h}m" for h in horizons_min] + [EOD_LABEL]
+
+
+def daily_horizon_keys(horizons_days: tuple[int, ...] = HORIZONS_DAYS) -> list[str]:
+    return [f"{d}d" for d in horizons_days]
+
+
+def compute_daily_forward_returns(
+    index: int,
+    dates: list[str],
+    closes: list[float],
+    symbol: str,
+    horizons_days: tuple[int, ...] = HORIZONS_DAYS,
+    direction: int = 1,
+) -> ForwardReturns:
+    """
+    Label a daily observation using only sessions strictly after it.
+
+    The cross-session twin of `compute_forward_returns`. Horizons count TRADING
+    SESSIONS, not calendar days, so a long weekend or an exchange holiday does
+    not silently shorten a horizon — `dates` is the list of sessions we actually
+    hold, in order, and +1d means the next one of those.
+
+    Args:
+        index: position in the session series being labelled
+        dates/closes: the full session series, ascending, one close per session
+        direction: +1 long, -1 short. MAE/MFE are expressed in the direction of
+            the trade, so "adverse" always means against the position.
+
+    A horizon running past the end of the data returns None rather than being
+    truncated to the last available session: a 20-session label built from 4
+    sessions is a different statistic wearing the same name.
+    """
+    entry_close = closes[index]
+
+    returns: dict[str, Optional[float]] = {}
+    mae: dict[str, Optional[float]] = {}
+    mfe: dict[str, Optional[float]] = {}
+
+    for d in horizons_days:
+        key = f"{d}d"
+        end = index + d
+        if end >= len(closes):
+            returns[key] = mae[key] = mfe[key] = None
+            continue
+
+        path = closes[index + 1:end + 1]
+        excursions = [direction * _bps(entry_close, p) for p in path]
+        returns[key] = round(direction * _bps(entry_close, closes[end]), 2)
+        mae[key] = round(min(excursions), 2)
+        mfe[key] = round(max(excursions), 2)
+
+    return ForwardReturns(
+        ts=dates[index],
+        symbol=symbol,
+        spot_at_signal=entry_close,
+        returns_bps=returns,
+        mae_bps=mae,
+        mfe_bps=mfe,
+    )

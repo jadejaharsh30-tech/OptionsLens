@@ -287,10 +287,14 @@ def test_backtester_runs_over_materialised_eod_history():
         assert out["sessions"] == len(dates)
         assert out["evaluations"] == len(dates)   # one EOD bar per session
         assert out["signals_fired"] > 0
-        # A verdict per horizon, even if it is INSUFFICIENT_DATA — the point is
-        # that EOD history reaches the same null comparison as recorder data.
-        assert set(out["horizons"]) >= {"5m", "eod"}
-        assert out["horizons"]["eod"]["verdict"] in (
+        # One bar per session, so the engine must pick DAILY labelling: intraday
+        # horizons would all score n=0 and the EOD label would compare a bar
+        # with itself.
+        assert out["label_mode"] == "daily"
+        assert set(out["horizons"]) == {"1d", "5d", "20d"}
+        # Cross-session labels are real numbers, not the degenerate self-compare.
+        assert out["horizons"]["1d"]["signal"]["n"] > 0
+        assert out["horizons"]["1d"]["verdict"] in (
             "EDGE", "INVERSE_EDGE", "NO_EDGE", "INSUFFICIENT_DATA", "INDETERMINATE")
     finally:
         os.unlink(src)

@@ -20,7 +20,10 @@ import random
 from dataclasses import dataclass
 from typing import Optional
 
-from backtest.labels import ForwardReturns, compute_forward_returns, horizon_keys
+from backtest.labels import (
+    HORIZONS_DAYS, ForwardReturns, compute_daily_forward_returns,
+    compute_forward_returns, horizon_keys,
+)
 from backtest.metrics import HorizonStats, horizon_stats
 
 
@@ -154,4 +157,90 @@ def compare(signal_labels: list[ForwardReturns],
         cmp_.beats_null = cmp_.verdict() == "EDGE"
         out[h] = cmp_
 
+    return out
+
+
+# ── Daily-frequency null ─────────────────────────────────────────────────────
+#
+# Clock-time matching is meaningless when every bar is a session close, so the
+# daily null matches on WEEKDAY instead. That is the analogue that matters: the
+# weekly expiry cycle lands on a fixed weekday, and expiry-adjacent sessions
+# behave differently from the rest. Matching on it means a signal that happens
+# to fire mostly on expiry days is compared against random entries on expiry
+# days, not against the week as a whole.
+#
+# Days-to-expiry would be the sharper match, but it needs the expiry calendar
+# the labels do not carry. Weekday captures the same cycle empirically, without
+# hardcoding a rule that NSE has already changed once.
+
+def sample_null_sessions(
+    signal_indices: list[int],
+    dates: list[str],
+    samples_per_signal: int = 10,
+    seed: int = 42,
+    match_weekday: bool = True,
+) -> list[int]:
+    """
+    Draw random session indices matched to the signals' weekday distribution.
+
+    Returns indices into `dates`, to be labelled exactly as the real signals
+    were. Falls back to drawing from all sessions when a weekday has too few
+    to sample from — a thin match is worse than none, because it would compare
+    the signal against a handful of repeated days.
+    """
+    from datetime import datetime
+
+    rng = random.Random(seed)
+    if not dates or not signal_indices:
+        return []
+
+    by_weekday: dict[int, list[int]] = {}
+    for i, d in enumerate(dates):
+        try:
+            wd = datetime.strptime(d[:10], "%Y-%m-%d").weekday()
+        except ValueError:
+            continue
+        by_weekday.setdefault(wd, []).append(i)
+
+    all_indices = list(range(len(dates)))
+    picks: list[int] = []
+
+    for si in signal_indices:
+        pool = all_indices
+        if match_weekday and 0 <= si < len(dates):
+            try:
+                wd = datetime.strptime(dates[si][:10], "%Y-%m-%d").weekday()
+                candidates = by_weekday.get(wd, [])
+                if len(candidates) >= 5:
+                    pool = candidates
+            except ValueError:
+                pass
+        for _ in range(samples_per_signal):
+            picks.append(rng.choice(pool))
+
+    return picks
+
+
+def build_daily_null_labels(
+    picks: list[int],
+    dates: list[str],
+    closes: list[float],
+    symbol: str,
+    directions: Optional[list[int]] = None,
+    horizons_days: tuple[int, ...] = HORIZONS_DAYS,
+) -> list[ForwardReturns]:
+    """
+    Label the drawn sessions exactly as the real signals were labelled.
+
+    `directions` mirrors the signal's long/short mix onto the null, one entry
+    per pick. Without it a directionally biased signal would be compared with an
+    implicitly always-long null, which in a trending sample is a rigged contest.
+    """
+    out = []
+    for n, idx in enumerate(picks):
+        direction = directions[n] if directions and n < len(directions) else 1
+        out.append(compute_daily_forward_returns(
+            index=idx, dates=dates, closes=closes, symbol=symbol,
+            horizons_days=horizons_days, direction=direction,
+        ))
     return out
