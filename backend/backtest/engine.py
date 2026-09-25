@@ -92,6 +92,7 @@ def run_backtest(
     persist_evaluations: bool = True,
     db_path: Optional[str] = None,
     label_mode: str = "auto",
+    extras: Optional[dict[str, Any]] = None,
 ) -> BacktestRun:
     """
     Run one signal over recorded data and compare it against a matched null.
@@ -111,7 +112,7 @@ def run_backtest(
     fired_entries: list[tuple[str, str, int]] = []   # (session_date, ts, direction)
 
     for replay in replay_range(spec, symbol, dates, params, history_window,
-                               db_path=db_path):
+                               db_path=db_path, extras=extras):
         if not replay.timestamps:
             continue
         session_series[replay.session_date] = (replay.timestamps, replay.spots)

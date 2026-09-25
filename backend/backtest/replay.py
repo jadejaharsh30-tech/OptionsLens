@@ -78,10 +78,11 @@ def replay_range(
     params: Optional[dict[str, Any]] = None,
     history_window: int = 60,
     db_path: Optional[str] = None,
+    extras: Optional[dict[str, Any]] = None,
 ) -> Iterator[ReplayResult]:
     """Replay many sessions, oldest first."""
     kwargs = {"db_path": db_path} if db_path else {}
     dates = session_dates or recorded_dates(symbol, **kwargs)
     for d in sorted(dates):
         yield replay_session(spec, symbol, d, params, history_window,
-                             db_path=db_path)
+                             extras=extras, db_path=db_path)

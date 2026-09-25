@@ -17,6 +17,7 @@ from signals.registry import register_signal
 # Registers the ported alert-engine rule (roadmap item 37). Imported for its
 # side effect; the signal itself lives in its own module because it is large.
 import signals.oi_buildup  # noqa: F401,E402
+import signals.vrp_signal  # noqa: F401,E402
 
 
 @register_signal(

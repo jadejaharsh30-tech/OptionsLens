@@ -90,3 +90,43 @@ def compute_rv_series(
             results.append({"date": trading_dates[i], "rv": rv})
 
     return results
+
+
+def rv_series_from_dated_closes(
+    dated_closes: list[dict],   # [{"date": "YYYY-MM-DD", "spot": float}], ascending
+    window: int = 20,
+) -> list[dict]:
+    """
+    Rolling realized vol carrying the REAL date of each observation.
+
+    Replaces `compute_rv_series`, which reconstructed dates by counting weekdays
+    backwards from today. That ignores exchange holidays, so after every holiday
+    the whole series shifted by a day or two against the IV series it is paired
+    with — and a variance-risk-premium signal is IV minus RV, so the
+    misalignment lands directly in the signal rather than merely in a chart.
+
+    `spot_history` (populated from the exchange's own closes by the bhavcopy
+    import, and by the 15:50 job live) holds properly dated closes, so the dates
+    no longer have to be guessed.
+
+    Each output date is the date of the LAST close in its window: RV on date D
+    is the volatility realised over the `window` returns ending at D's close, so
+    it is knowable at D's close and pairs with an IV reading taken the same day.
+
+    Returns [{"date": str, "rv": float}] ascending. Empty when short of history.
+    """
+    clean = [
+        r for r in dated_closes
+        if r.get("date") and r.get("spot") and r["spot"] > 0
+    ]
+    clean.sort(key=lambda r: r["date"])
+    if len(clean) < window + 1:
+        return []
+
+    closes = [r["spot"] for r in clean]
+    out = []
+    for i in range(window, len(clean)):
+        rv = compute_realized_vol(closes[i - window: i + 1], window=window)
+        if rv is not None:
+            out.append({"date": clean[i]["date"], "rv": rv})
+    return out

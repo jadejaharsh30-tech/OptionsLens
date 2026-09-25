@@ -27,8 +27,8 @@ from fyers_client import (
     fetch_expiry_list, fetch_quote, fetch_historical_prices, get_fyers,
 )
 from live_iv import live_cm_atm_iv
-from snapshot_store import get_cm_iv_history, get_iv_percentile
-from realized_vol import compute_realized_vol, compute_rv_series
+from snapshot_store import get_cm_iv_history, get_iv_percentile, get_spot_history
+from realized_vol import compute_realized_vol, rv_series_from_dated_closes
 from config import UNDERLYINGS, DB_PATH
 
 HISTORY_DATES = 252      # one year of trading dates
@@ -109,6 +109,7 @@ def get_iv_rank_endpoint(symbol: str, token: str = Depends(get_token)):
     rv_60d_pct   = None
     vol_premium  = None
     iv_rv_series = []
+    rv_dates_exact = False
 
     if closes:
         rv_20d = compute_realized_vol(closes, window=20)
@@ -119,8 +120,20 @@ def get_iv_rank_endpoint(symbol: str, token: str = Depends(get_token)):
         if current_iv_pct is not None and rv_20d_pct is not None:
             vol_premium = round(current_iv_pct - rv_20d_pct, 2)
 
-        # Build IV vs RV time series for the AreaChart
-        rv_series   = compute_rv_series(closes, window=20)
+        # Build IV vs RV time series for the AreaChart.
+        #
+        # RV dates come from `spot_history`, which holds exchange closes with
+        # their real dates. The previous version reconstructed dates by counting
+        # weekdays backwards from today, which ignores exchange holidays and so
+        # shifted the whole RV series against the IV series it is paired with
+        # after every one of them. Falls back to the broker's undated closes
+        # only when spot_history is empty, and says so in the response.
+        dated = get_spot_history(DB_PATH, symbol, days=120)
+        rv_series = rv_series_from_dated_closes(
+            sorted(dated, key=lambda r: r["date"]), window=20)
+        rv_dates_exact = bool(rv_series)
+        if not rv_series:
+            rv_series = []
         # One constant-maturity reading per date. Keying the raw per-expiry
         # rows by date instead would keep whichever expiry happened to be read
         # last, a different tenor on different days.
@@ -165,4 +178,7 @@ def get_iv_rank_endpoint(symbol: str, token: str = Depends(get_token)):
         "rv_60d":        rv_60d_pct,
         "vol_premium":   vol_premium,
         "iv_rv_series":  iv_rv_series,
+        # False means spot_history had no closes and the chart is empty rather
+        # than silently misaligned.
+        "rv_dates_exact": rv_dates_exact,
     }

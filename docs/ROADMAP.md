@@ -118,16 +118,18 @@ differentiator. This is another reason the recorder is urgent.
 
 ### Phase 4 — Signals with actual edge (ranked by readiness)
 
-- [ ] 30. **VRP signal** — IV−RV percentile rank. NOTE (corrected 2026-09-11): a VRP
-  *reading* is available today (RV comes from Fyers history, IV from the live chain),
-  but the *signal* is the percentile rank of that spread against its own history,
-  and `atm_iv_history` only builds one row per trading day from the day we started
-  running. So this needs ~30 sessions of accumulation before it can be evaluated —
-  it is not testable today as originally written.
-  UPDATE 2026-09-23: history is no longer the blocker. `bhavcopy/` backfills
-  per-expiry ATM IV from NSE end-of-day files (545 trading days from 2024-07-08
-  loaded locally), and IV is now 30-day constant maturity, the tenor that
-  matches RV 20d. The signal itself is not built yet
+- [~] 30. **VRP signal** — BUILT 2026-09-25 as `signals/vrp_signal.py` (`vrp.v1`),
+  over `vrp.py` (join, percentile, loader). 30-day constant-maturity ATM IV minus
+  20-session realised vol, ranked as a percentile of its own history. IV and RV
+  are joined ON DATE, never by position. Look-ahead is controlled by one tested
+  function, `observations_before`, which is strictly `<`.
+  **NOT YET SCORED PROPERLY — see the open question on vol-outcome labelling.**
+  The backtester scores every signal by SIGNED UNDERLYING RETURN, which is the
+  wrong target for a volatility signal: a SHORT_VOL position pays when realised
+  vol comes in under implied, not when the index goes up. On 300 synthetic
+  sessions it fires 19% of the time and returns NO_EDGE at every horizon, which
+  only establishes that VRP does not predict direction — something nobody
+  claims. A real verdict needs the vol-outcome labeller
 - [x] 31. **GEX regime** — implemented as the first registered signal (`signals/library.py`); trades the flip level, not the raw GEX number. NOT yet validated — needs recorded data
 - [ ] 32. **Signed aggressor flow** — Lee-Ready style classification from bid/ask, replacing raw OI%
 - [ ] 33. **Term structure & skew** — front/back inversion, 25-delta risk reversal percentile. `eod_vol.term_structure_slope` (60d minus 30d constant-maturity IV) exists; no signal registered yet
@@ -184,6 +186,18 @@ differentiator. This is another reason the recorder is urgent.
 ## Progress log
 
 Append one line per session. Keep it terse.
+
+- **2026-09-25 (12)** — Item 30 built, and the RV dating bug fixed.
+  `rv_series_from_dated_closes` takes dated closes from `spot_history` instead
+  of reconstructing dates by counting weekdays back from today, which ignored
+  exchange holidays and shifted RV against IV after every one. `vrp.py` joins
+  the two ON DATE so a missing reading is a gap rather than an invisible
+  one-day offset. `/api/ivrank` now returns `rv_dates_exact` so an empty
+  `spot_history` shows as an empty chart rather than a misaligned one.
+  323 tests pass.
+  **Immediately surfaced the next gap:** the backtester scores signals by signed
+  underlying return, which cannot evaluate a volatility signal at all. VRP is
+  built and correct; the scoring target is wrong for it. See open questions.
 
 - **2026-09-25 (11)** — Cross-session labelling, which unblocks all EOD research.
   `HORIZONS_DAYS = (1, 5, 20)` counted in trading sessions, a weekday-matched
@@ -293,6 +307,18 @@ Append one line per session. Keep it terse.
 ---
 
 ## Open questions / decisions to revisit
+
+- **Vol signals need a vol outcome, not a directional one.** `backtest/labels.py`
+  measures signed underlying return at every horizon. That is right for BULLISH
+  and BEARISH signals and meaningless for SHORT_VOL and LONG_VOL: a short-vol
+  position pays when realised volatility comes in below the implied level it was
+  sold at, whichever way the index moves. Until this exists, item 30's NO_EDGE
+  verdict says only that VRP does not predict direction, which was never the
+  claim, and items 33 and 36 inherit the same problem.
+  What it needs: a label of realised vol over the horizon versus the IV at
+  entry (a vol-points miss), and a null drawn the same way. The direction enum
+  already separates the two families, so `run_backtest` can pick the labeller
+  from the fired signal's direction rather than needing a new flag.
 
 - ~~Daily-horizon labels are missing~~ **DONE 2026-09-25.** `+1d/+5d/+20d`
   counting trading sessions (so a holiday cannot silently shorten a horizon),
