@@ -20,6 +20,7 @@ from pydantic import BaseModel
 from auth import get_token
 from backtest.engine import run_backtest
 from backtest.walkforward import describe_data_sufficiency
+from config import DB_PATH
 from recorder.store import recorded_dates
 from signals.registry import get_signal, list_signals
 from signals.store import evaluation_summary
@@ -94,6 +95,43 @@ def data_readiness(symbol: str = "NIFTY", train_days: int = 20,
     }
 
 
+def _build_extras(symbol: str) -> tuple[dict, list[str]]:
+    """
+    Assemble the history a signal cannot reach on its own.
+
+    A signal sees ChainSnapshots only, which is what makes live and backtest
+    identical — but VRP ranks against two years of daily readings, and vol
+    labelling needs the implied level at entry. Both arrive here, built by
+    `vrp.load_vrp_history` so the API and any script compute them identically.
+
+    Returns the extras plus notes, because a signal that silently skips every
+    bar for want of a series is the least debuggable outcome there is.
+    """
+    from vrp import load_vrp_history, summarise
+
+    notes: list[str] = []
+    try:
+        series = load_vrp_history(DB_PATH, symbol)
+    except Exception as e:                       # noqa: BLE001
+        logger.warning(f"VRP history unavailable for {symbol}: {e!r}")
+        return {}, [f"VRP history could not be loaded: {e}"]
+
+    if not series:
+        notes.append(
+            f"No paired IV/RV history for {symbol}, so vrp will skip every bar "
+            f"and vol outcomes cannot be scored. Run the bhavcopy import "
+            f"(docs/BHAVCOPY.md) to populate atm_iv_history and spot_history.")
+        return {}, notes
+
+    info = summarise(series)
+    notes.append(
+        f"VRP history: {info['observations']} paired observations, "
+        f"{info['first_date']} to {info['last_date']}.")
+    return ({"vrp_series": series,
+             "iv_series": [{"date": r["date"], "iv": r["iv"]} for r in series]},
+            notes)
+
+
 @router.post("/run")
 def run(req: RunRequest, token: str = Depends(get_token)):
     """Replay a signal over recorded data and compare it against a matched null."""
@@ -110,8 +148,11 @@ def run(req: RunRequest, token: str = Depends(get_token)):
             f"market hours before a backtest can be run.",
         )
 
+    extras, extra_notes = _build_extras(req.symbol)
+
     try:
         result = run_backtest(
+            extras         = extras,
             signal_id      = req.signal_id,
             symbol         = req.symbol,
             version        = req.version,
@@ -126,7 +167,9 @@ def run(req: RunRequest, token: str = Depends(get_token)):
         logger.exception("Backtest failed")
         raise HTTPException(500, f"Backtest failed: {e}")
 
-    return result.to_dict()
+    payload = result.to_dict()
+    payload["notes"] = extra_notes + payload.get("notes", [])
+    return payload
 
 
 @router.get("/evaluations/{signal_id}")

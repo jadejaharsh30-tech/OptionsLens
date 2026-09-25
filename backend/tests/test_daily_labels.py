@@ -275,3 +275,82 @@ def test_explicit_mode_overrides_detection():
         assert out["label_mode"] == "intraday"
     finally:
         os.unlink(db)
+
+
+# ── Cross-session history windows ────────────────────────────────────────────
+
+@register_signal("history_probe", version=1, min_history=3)
+def _history_probe(ctx):
+    """Reports how much history it was given, and needs 3 bars to run at all."""
+    return SignalResult.fire(Signal(
+        signal_id="history_probe", version=1, ts=ctx.ts, symbol=ctx.symbol,
+        direction=Direction.BULLISH, strength=0.5,
+        features={"history_len": len(ctx.history)},
+    ))
+
+
+def test_daily_history_carries_across_sessions():
+    """
+    One bar per session means the window is empty unless it carries. Before
+    this, any min_history above zero skipped every bar forever.
+    """
+    from backtest.engine import run_backtest
+    from signals.store import iter_evaluations
+
+    db = _one_bar_per_session_db(n_sessions=20)
+    try:
+        out = run_backtest("history_probe", SYM, db_path=db).to_dict()
+        assert out["signals_fired"] > 0
+
+        evals = list(iter_evaluations("history_probe", db_path=db))
+        fired = [e for e in evals if e["fired"]]
+        # First three sessions warm up; the fourth onward sees prior sessions.
+        assert len(fired) == len(evals) - 3
+        assert max(e["features"]["history_len"] for e in fired) >= 3
+    finally:
+        os.unlink(db)
+
+
+def test_history_does_not_carry_across_intraday_sessions():
+    """
+    Deliberately NOT carried for minute bars: yesterday's last few minutes
+    would let an OI-velocity rule match a spike across the overnight gap, where
+    open interest has been restated against a new settlement.
+    """
+    from backtest.engine import run_backtest
+    from signals.store import iter_evaluations
+
+    db = _minute_bar_db(n_bars=10)
+    try:
+        run_backtest("history_probe", SYM, db_path=db)
+        evals = list(iter_evaluations("history_probe", db_path=db))
+        by_session = {}
+        for e in evals:
+            by_session.setdefault(e["session_date"], []).append(e)
+
+        # Each session warms up again from zero.
+        assert len(by_session) == 2
+        for rows in by_session.values():
+            rows.sort(key=lambda r: r["ts"])
+            assert not rows[0]["fired"]
+            assert "warming up" in rows[0]["reason"]
+    finally:
+        os.unlink(db)
+
+
+def test_carried_history_still_excludes_the_current_bar():
+    """Carrying must not weaken the look-ahead guarantee."""
+    from backtest.engine import run_backtest
+    from signals.store import iter_evaluations
+
+    db = _one_bar_per_session_db(n_sessions=12)
+    try:
+        run_backtest("history_probe", SYM, db_path=db)
+        fired = [e for e in iter_evaluations("history_probe", db_path=db)
+                 if e["fired"]]
+        fired.sort(key=lambda r: r["ts"])
+        # Session i (0-based) can only ever have seen i prior bars.
+        for offset, e in enumerate(fired):
+            assert e["features"]["history_len"] == offset + 3
+    finally:
+        os.unlink(db)

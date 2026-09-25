@@ -239,3 +239,28 @@ def coverage_stats(db_path: str = MARKET_DATA_DB) -> dict:
             for r in per_symbol
         ],
     }
+
+
+def session_snapshot_counts(symbol: str, dates: Optional[list[str]] = None,
+                            db_path: str = MARKET_DATA_DB) -> dict[str, int]:
+    """
+    Snapshots held per session date. One query, no row payload.
+
+    Lets a caller tell one-bar-per-session EOD data from the recorder's
+    one-per-minute bars before replaying, which decides whether a signal's
+    history window should carry across sessions.
+    """
+    with _conn(db_path) as conn:
+        if dates:
+            marks = ",".join("?" * len(dates))
+            rows = conn.execute(f"""
+                SELECT session_date, COUNT(*) FROM chain_meta
+                WHERE symbol = ? AND session_date IN ({marks})
+                GROUP BY session_date
+            """, (symbol, *dates)).fetchall()
+        else:
+            rows = conn.execute("""
+                SELECT session_date, COUNT(*) FROM chain_meta
+                WHERE symbol = ? GROUP BY session_date
+            """, (symbol,)).fetchall()
+    return {r[0]: r[1] for r in rows}

@@ -30,7 +30,7 @@ from backtest.vol_labels import (
 from backtest.metrics import BacktestStats, horizon_stats, interpret
 from backtest.replay import replay_range
 from market_hours import IST
-from recorder.store import recorded_dates
+from recorder.store import recorded_dates, session_snapshot_counts
 from signals.base import Direction
 from signals.registry import SignalSpec, get_signal
 from signals.store import write_evaluations
@@ -115,13 +115,22 @@ def run_backtest(
     dates = session_dates or recorded_dates(symbol, **kwargs)
     dates = sorted(dates)
 
+    # One bar per session means the history window must carry across sessions,
+    # or it is always empty and any min_history above zero skips forever. For
+    # intraday bars it must NOT carry: yesterday's last minutes would let an
+    # OI-velocity rule match a spike across the overnight gap, where open
+    # interest has been restated against a new settlement. Read from the data.
+    counts = session_snapshot_counts(symbol, dates, **kwargs)
+    carry_history = bool(counts) and all(c == 1 for c in counts.values())
+
     all_results = []
     session_series: dict[str, tuple[list[str], list[float]]] = {}
     # (session_date, ts, sign, direction_name)
     fired_entries: list[tuple[str, str, int, str]] = []
 
     for replay in replay_range(spec, symbol, dates, params, history_window,
-                               db_path=db_path, extras=extras):
+                               db_path=db_path, extras=extras,
+                               carry_history=carry_history):
         if not replay.timestamps:
             continue
         session_series[replay.session_date] = (replay.timestamps, replay.spots)

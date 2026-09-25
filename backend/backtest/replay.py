@@ -25,6 +25,9 @@ class ReplayResult:
     results:      list[SignalResult]
     timestamps:   list[str]
     spots:        list[float]
+    # The window as it stood after the last bar, so `replay_range` can carry it
+    # into the next session without re-reading anything.
+    end_history:  tuple[ChainSnapshot, ...] = ()
 
     @property
     def fired(self) -> list[SignalResult]:
@@ -39,6 +42,7 @@ def replay_session(
     history_window: int = 60,
     extras: Optional[dict[str, Any]] = None,
     db_path: Optional[str] = None,
+    seed_history: tuple[ChainSnapshot, ...] = (),
 ) -> ReplayResult:
     """
     Replay one symbol-day, evaluating `spec` at every snapshot.
@@ -50,7 +54,9 @@ def replay_session(
     kwargs = {"db_path": db_path} if db_path else {}
     snapshots = list(iter_snapshots(symbol, session_date, **kwargs))
 
-    history: deque[ChainSnapshot] = deque(maxlen=history_window)
+    # Seeded from prior sessions when the caller carries it. Still appended to
+    # only AFTER evaluation, so a bar never sees itself or anything later.
+    history: deque[ChainSnapshot] = deque(seed_history, maxlen=history_window)
     results, timestamps, spots = [], [], []
 
     for snap in snapshots:
@@ -68,6 +74,7 @@ def replay_session(
     return ReplayResult(
         symbol=symbol, session_date=session_date,
         results=results, timestamps=timestamps, spots=spots,
+        end_history=tuple(history),
     )
 
 
@@ -79,10 +86,27 @@ def replay_range(
     history_window: int = 60,
     db_path: Optional[str] = None,
     extras: Optional[dict[str, Any]] = None,
+    carry_history: bool = False,
 ) -> Iterator[ReplayResult]:
-    """Replay many sessions, oldest first."""
+    """
+    Replay many sessions, oldest first.
+
+    `carry_history` decides whether a session starts with the tail of the
+    previous one. It must be True for one-bar-per-session data, where otherwise
+    the window is always empty and any `min_history` above zero skips forever.
+
+    It must be False for intraday bars: carrying yesterday's last few minutes
+    into today's open would let an OI-velocity rule match a "spike" across the
+    overnight gap, where open interest has been restated against a new
+    settlement. `run_backtest` decides from the data rather than guessing.
+    """
     kwargs = {"db_path": db_path} if db_path else {}
     dates = session_dates or recorded_dates(symbol, **kwargs)
+    carried: tuple[ChainSnapshot, ...] = ()
     for d in sorted(dates):
-        yield replay_session(spec, symbol, d, params, history_window,
-                             extras=extras, db_path=db_path)
+        result = replay_session(spec, symbol, d, params, history_window,
+                                extras=extras, db_path=db_path,
+                                seed_history=carried)
+        if carry_history:
+            carried = result.end_history
+        yield result

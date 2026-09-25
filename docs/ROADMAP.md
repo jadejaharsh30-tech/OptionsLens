@@ -178,7 +178,7 @@ differentiator. This is another reason the recorder is urgent.
 
 ### Phase 7 — Platform hardening
 
-- [ ] 54. Router tests with a mocked Fyers client via `app.dependency_overrides`; backtest + signal unit tests
+- [x] 54. Router tests — 30 covering auth/validate, recorder, backtest, trades, notify, alert-engine, chain, oi, expiries, with the broker faked via `dependency_overrides` + monkeypatch. Includes a regression for the auth bug that rejected every valid token. Found that `start_scheduler` was not safe to call twice; now guarded
 - [ ] 55. CI (GitHub Actions running pytest), Fyers response caching, recorder supervision/auto-restart, Docker persistence
 
 ---
@@ -186,6 +186,14 @@ differentiator. This is another reason the recorder is urgent.
 ## Progress log
 
 Append one line per session. Keep it terse.
+
+- **2026-09-25 (14)** — Cross-session history windows, router tests, and the
+  gap that made item 30 unusable from the UI. `/api/backtest/run` now builds the
+  VRP and IV series server-side via `vrp.load_vrp_history` and passes them as
+  extras: without this the `vrp` signal appeared in the dropdown and skipped
+  every bar with "no VRP series supplied". It also returns a note saying how
+  many paired observations exist, so an empty history is visible rather than
+  silent. 375 tests pass.
 
 - **2026-09-25 (13)** — Vol-outcome labelling, so volatility signals can finally
   be scored on volatility. `vol_labels.py` measures implied at entry against vol
@@ -334,13 +342,12 @@ Append one line per session. Keep it terse.
   returned NO_EDGE with a slightly NEGATIVE edge at 5d. The labeller
   discriminates and is not biased toward finding edge.
 
-- **History windows do not span sessions.** `replay_session` accumulates its
-  window within one session, so on one-bar-per-session EOD data `ctx.history` is
-  always empty and any `min_history` above zero skips forever. VRP works because
-  it takes its series through `extras`, but a daily signal wanting prior BARS
-  (term-structure change, OI trend) has no route to them. Fix is to seed the
-  window from prior sessions in `replay_range`, keeping the append-after-
-  evaluation rule that makes look-ahead impossible.
+- ~~History windows do not span sessions~~ **DONE 2026-09-25.** `replay_range`
+  carries the window between sessions, decided from the data: one bar per
+  session carries, intraday does not. Carrying intraday would let an
+  OI-velocity rule match a "spike" across the overnight gap, where open
+  interest has been restated against a new settlement. Appending still happens
+  only AFTER evaluation, so the look-ahead guarantee is unchanged and tested.
 
 - ~~Daily-horizon labels are missing~~ **DONE 2026-09-25.** `+1d/+5d/+20d`
   counting trading sessions (so a holiday cannot silently shorten a horizon),

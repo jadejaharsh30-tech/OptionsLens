@@ -199,6 +199,13 @@ def start_scheduler():
     """
     init_db(DB_PATH)  # Ensure tables exist on startup
 
+    # Starting twice binds jobs to whichever loop ran first, which is dead by
+    # the time the second caller arrives. Production starts the app once, but a
+    # test harness (or a reload) can call this repeatedly.
+    if scheduler.running:
+        logger.info("Scheduler already running; leaving it alone.")
+        return
+
     iv_hour, iv_min = (int(x) for x in IV_SNAPSHOT_TIME_IST.split(":"))
     scheduler.add_job(
         run_daily_snapshot,
