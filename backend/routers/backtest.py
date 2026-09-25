@@ -23,6 +23,7 @@ from backtest.walkforward import describe_data_sufficiency
 from config import DB_PATH
 from recorder.store import recorded_dates
 from signals.registry import get_signal, list_signals
+from signals.skew_signal import SIGNAL_ID as SKEW_SIGNAL_ID
 from signals.store import evaluation_summary
 
 router = APIRouter(prefix="/api/backtest", tags=["backtest"])
@@ -95,41 +96,130 @@ def data_readiness(symbol: str = "NIFTY", train_days: int = 20,
     }
 
 
-def _build_extras(symbol: str) -> tuple[dict, list[str]]:
+def _build_extras(symbol: str, signal_id: Optional[str] = None,
+                  ) -> tuple[dict, list[str]]:
     """
     Assemble the history a signal cannot reach on its own.
 
     A signal sees ChainSnapshots only, which is what makes live and backtest
-    identical — but VRP ranks against two years of daily readings, and vol
-    labelling needs the implied level at entry. Both arrive here, built by
-    `vrp.load_vrp_history` so the API and any script compute them identically.
+    identical — but VRP ranks against two years of daily readings, the term
+    structure spans expiries a single snapshot does not contain, the skew
+    percentile needs a chain-wide solve per session, and vol labelling needs the
+    implied level at entry. All of it is built here through the same loaders any
+    script would call, so the API cannot compute a different history.
 
-    Returns the extras plus notes, because a signal that silently skips every
-    bar for want of a series is the least debuggable outcome there is.
+    Each series is built independently: a missing far-month leg must not also
+    blank the VRP spread. Every outcome produces a note, because a signal that
+    silently skips every bar for want of a series is the least debuggable
+    outcome there is.
+
+    The VRP and term-structure series are a SQL read plus interpolation, so they
+    are always built — `iv_series` in particular is what vol labelling scores
+    any volatility signal against, whichever one is being run. The skew series
+    solves IV across a whole chain per session, so it is built only for the
+    signal that consumes it rather than charged to every run.
     """
+    extras: dict[str, Any] = {}
+    notes: list[str] = []
+
+    _add_vrp_extras(symbol, extras, notes)
+    _add_term_structure_extras(symbol, extras, notes)
+    if signal_id == SKEW_SIGNAL_ID:
+        _add_skew_extras(symbol, extras, notes)
+    return extras, notes
+
+
+def _add_vrp_extras(symbol: str, extras: dict, notes: list[str]) -> None:
+    """VRP spread, and the entry-IV series vol labelling scores against."""
     from vrp import load_vrp_history, summarise
 
-    notes: list[str] = []
     try:
         series = load_vrp_history(DB_PATH, symbol)
     except Exception as e:                       # noqa: BLE001
         logger.warning(f"VRP history unavailable for {symbol}: {e!r}")
-        return {}, [f"VRP history could not be loaded: {e}"]
+        notes.append(f"VRP history could not be loaded: {e}")
+        return
 
     if not series:
         notes.append(
             f"No paired IV/RV history for {symbol}, so vrp will skip every bar "
             f"and vol outcomes cannot be scored. Run the bhavcopy import "
             f"(docs/BHAVCOPY.md) to populate atm_iv_history and spot_history.")
-        return {}, notes
+        return
 
     info = summarise(series)
     notes.append(
         f"VRP history: {info['observations']} paired observations, "
         f"{info['first_date']} to {info['last_date']}.")
-    return ({"vrp_series": series,
-             "iv_series": [{"date": r["date"], "iv": r["iv"]} for r in series]},
-            notes)
+    extras["vrp_series"] = series
+    extras["iv_series"] = [{"date": r["date"], "iv": r["iv"]} for r in series]
+
+
+def _add_term_structure_extras(symbol: str, extras: dict, notes: list[str]) -> None:
+    """
+    60-day minus 30-day constant-maturity IV.
+
+    The far leg is the one that fails, and it fails silently: it needs a traded
+    expiry beyond two months, which monthly-only symbols often do not have. The
+    note reports its coverage against the near leg so a thin series is visible
+    as thin rather than read as a full history.
+    """
+    from term_structure import coverage, load_term_structure_history, summarise
+
+    try:
+        series = load_term_structure_history(DB_PATH, symbol)
+        cov = coverage(DB_PATH, symbol)
+    except Exception as e:                       # noqa: BLE001
+        logger.warning(f"Term structure unavailable for {symbol}: {e!r}")
+        notes.append(f"Term-structure history could not be loaded: {e}")
+        return
+
+    if not series:
+        notes.append(
+            f"No term-structure history for {symbol} ({cov['near_dates']} dates "
+            f"reach 30 days, {cov['far_dates']} reach 60), so term_structure "
+            f"will skip every bar. The far leg needs a traded expiry beyond two "
+            f"months.")
+        return
+
+    info = summarise(series)
+    notes.append(
+        f"Term structure: {info['observations']} paired observations "
+        f"({cov['far_leg_coverage_pct']}% of dates with a 30-day reading also "
+        f"reach 60 days), {info['first_date']} to {info['last_date']}, "
+        f"{info['pct_inverted']}% inverted.")
+    extras["term_structure_series"] = series
+
+
+def _add_skew_extras(symbol: str, extras: dict, notes: list[str]) -> None:
+    """
+    25-delta risk reversal, one reading per recorded session.
+
+    Built from the recorder's own store rather than a daily table, because no
+    daily table holds per-strike IV for the bhavcopy backfill — only the live
+    snapshot job writes one, and it does not reach back.
+    """
+    from skew import load_skew_history, summarise
+
+    try:
+        series = load_skew_history(None, symbol)
+    except Exception as e:                       # noqa: BLE001
+        logger.warning(f"Skew history unavailable for {symbol}: {e!r}")
+        notes.append(f"Skew history could not be loaded: {e}")
+        return
+
+    if not series:
+        notes.append(
+            f"No 25-delta risk-reversal history for {symbol}, so skew_rr25 will "
+            f"skip every bar. The wings must have solvable IV within 0.10 delta "
+            f"of 0.25, which thin chains often do not.")
+        return
+
+    info = summarise(series)
+    notes.append(
+        f"Skew history: {info['observations']} sessions, {info['first_date']} "
+        f"to {info['last_date']}, {info['pct_negative']}% with puts bid.")
+    extras["skew_series"] = series
 
 
 @router.post("/run")
@@ -148,7 +238,7 @@ def run(req: RunRequest, token: str = Depends(get_token)):
             f"market hours before a backtest can be run.",
         )
 
-    extras, extra_notes = _build_extras(req.symbol)
+    extras, extra_notes = _build_extras(req.symbol, req.signal_id)
 
     try:
         result = run_backtest(

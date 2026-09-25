@@ -175,25 +175,58 @@ def iter_snapshots(symbol: str, session_date: str,
         """, (symbol, session_date)).fetchall()
 
         for m in metas:
-            rows = conn.execute("""
-                SELECT strike, option_type, oi, oi_change, oi_change_pct,
-                       prev_oi, ltp, bid, ask, volume
-                FROM chain_rows
-                WHERE ts = ? AND symbol = ? AND expiry_date = ?
-                ORDER BY strike ASC, option_type ASC
-            """, (m["ts"], symbol, m["expiry_date"])).fetchall()
+            yield _snapshot_from_meta(conn, m)
 
-            yield ChainSnapshot(
-                ts            = m["ts"],
-                session_date  = m["session_date"],
-                session_phase = SessionPhase(m["session_phase"]),
-                symbol        = m["symbol"],
-                expiry_date   = m["expiry_date"],
-                expiry_epoch  = m["expiry_epoch"],
-                spot          = m["spot"],
-                futures       = m["futures"],
-                rows          = tuple(ChainRow(**dict(r)) for r in rows),
-            )
+
+def _snapshot_from_meta(conn, meta) -> ChainSnapshot:
+    """Load one meta row's strikes and assemble the snapshot."""
+    rows = conn.execute("""
+        SELECT strike, option_type, oi, oi_change, oi_change_pct,
+               prev_oi, ltp, bid, ask, volume
+        FROM chain_rows
+        WHERE ts = ? AND symbol = ? AND expiry_date = ?
+        ORDER BY strike ASC, option_type ASC
+    """, (meta["ts"], meta["symbol"], meta["expiry_date"])).fetchall()
+
+    return ChainSnapshot(
+        ts            = meta["ts"],
+        session_date  = meta["session_date"],
+        session_phase = SessionPhase(meta["session_phase"]),
+        symbol        = meta["symbol"],
+        expiry_date   = meta["expiry_date"],
+        expiry_epoch  = meta["expiry_epoch"],
+        spot          = meta["spot"],
+        futures       = meta["futures"],
+        rows          = tuple(ChainRow(**dict(r)) for r in rows),
+    )
+
+
+def last_snapshot_of_session(symbol: str, session_date: str,
+                             db_path: str = MARKET_DATA_DB,
+                             ) -> Optional[ChainSnapshot]:
+    """
+    The final bar of one session, front expiry, or None.
+
+    Exists so a caller building a DAILY series out of the store does not have to
+    walk the session to find its last bar. `iter_snapshots` would load every
+    minute of every day and discard all but one — a year of recorder data is
+    millions of rows to answer a question about 250 of them.
+
+    Ties on timestamp are broken by the nearest expiry, matching the EOD
+    adapter's `nearest_expiry_only`, so a date materialised with the whole term
+    structure still yields the front chain rather than an arbitrary one.
+    """
+    with _conn(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        meta = conn.execute("""
+            SELECT * FROM chain_meta
+            WHERE symbol = ? AND session_date = ?
+            ORDER BY ts DESC, expiry_epoch ASC
+            LIMIT 1
+        """, (symbol, session_date)).fetchone()
+        if meta is None:
+            return None
+        return _snapshot_from_meta(conn, meta)
 
 
 def recorded_dates(symbol: Optional[str] = None,

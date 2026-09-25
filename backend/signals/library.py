@@ -19,6 +19,12 @@ from signals.registry import register_signal
 import signals.oi_buildup  # noqa: F401,E402
 import signals.vrp_signal  # noqa: F401,E402
 
+# Curve-shape signals (roadmap item 33): the term structure and the 25-delta
+# risk reversal. Both rank a daily series they cannot rebuild from a single
+# snapshot, so both receive it through `extras` — see routers/backtest.py.
+import signals.term_structure_signal  # noqa: F401,E402
+import signals.skew_signal  # noqa: F401,E402
+
 
 @register_signal(
     "gex_regime",

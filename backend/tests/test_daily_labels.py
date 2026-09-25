@@ -25,10 +25,10 @@ from backtest.labels import (  # noqa: E402
 SYM = "NIFTY"
 
 
-# min_history=0 on purpose: `replay_session` builds its history window WITHIN a
-# session, so one-bar-per-session data never accumulates any. Cross-session
-# history windows are an open roadmap item; a daily signal needing prior bars
-# currently has to receive them through `extras`, as the VRP signal does.
+# min_history=0 on purpose: what is under test here is mode selection, not the
+# history window. One-bar-per-session data does carry its window across sessions
+# (`replay_range(carry_history=...)`), but a probe that needs no history keeps
+# the two concerns separate.
 @register_signal("intraday_probe", version=1, min_history=0)
 def _intraday_probe(ctx):
     """Fires on every bar, so mode selection is what is being tested."""

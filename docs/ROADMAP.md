@@ -132,7 +132,29 @@ differentiator. This is another reason the recorder is urgent.
   claims. A real verdict needs the vol-outcome labeller
 - [x] 31. **GEX regime** — implemented as the first registered signal (`signals/library.py`); trades the flip level, not the raw GEX number. NOT yet validated — needs recorded data
 - [ ] 32. **Signed aggressor flow** — Lee-Ready style classification from bid/ask, replacing raw OI%
-- [ ] 33. **Term structure & skew** — front/back inversion, 25-delta risk reversal percentile. `eod_vol.term_structure_slope` (60d minus 30d constant-maturity IV) exists; no signal registered yet
+- [x] 33. **Term structure & skew** — DONE 2026-09-25. Two signals, both ranked
+  against their own history and both fed through `extras` because neither is
+  visible in a single snapshot.
+  `term_structure.v1` (`term_structure.py` + `signals/term_structure_signal.py`):
+  60d minus 30d constant-maturity ATM IV, both legs interpolated in total
+  variance so the weekly roll cannot manufacture a slope. Steep contango →
+  SHORT_VOL (the front rolls down), genuine inversion → LONG_VOL. A percentile
+  alone is not enough in either tail: an index curve is in contango nearly
+  always, so its 20th percentile is still a normal curve, and LONG_VOL
+  additionally requires the slope to be ≤ 0.
+  `skew_rr25.v1` (`skew.py` + `signals/skew_signal.py`): 25-delta risk reversal
+  percentile. The direction is genuinely contested, so `mode` selects
+  contrarian (bid put wing = capitulation → BULLISH) or momentum (= informed
+  positioning → BEARISH), recorded in the run's params. EOD bars only by
+  default — an intraday reading ranked against closing readings measures the
+  time of day.
+  **Two cautions on any result.** (a) `term_structure` is NOT independent of
+  `vrp`: both are driven by the same calm/stress regime, so an ensemble
+  counting them as two confirmations counts the regime twice. (b) The 60-day
+  leg is the fragile one — it needs a traded expiry beyond two months, which
+  monthly-only symbols often lack, so its percentile can end up conditioned on
+  the far month having traded. `term_structure.coverage()` reports that per
+  symbol and the API surfaces it as a note
 - [ ] 34. **CAS auction dislocation** — 15:15 price vs CAS equilibrium; new since Aug 2026, unexploited
 - [ ] 35. **Dispersion / implied correlation** — index IV vs cap-weighted constituent IV (we already have 5 constituents configured)
 - [ ] 36. Signal ensemble + conflict resolution
@@ -186,6 +208,21 @@ differentiator. This is another reason the recorder is urgent.
 ## Progress log
 
 Append one line per session. Keep it terse.
+
+- **2026-09-25 (15)** — Item 33: term structure and skew. `term_structure.v1`
+  ranks the 60d−30d constant-maturity slope; `skew_rr25.v1` ranks the 25-delta
+  risk reversal. Both receive their history through `extras`, like `vrp` — a
+  snapshot holds ONE expiry, so the curve is not in it by construction, and the
+  EOD adapter materialises only the front chain, so it is not in the replay
+  window either. Added `recorder.store.last_snapshot_of_session` so a daily
+  series can be built without walking every minute of every session.
+  `_build_extras` is now three independent passes, so one broken leg cannot
+  blank the others, and the skew pass (a chain-wide IV solve per session) is
+  built only for the signal that consumes it. Two design points worth keeping:
+  the term-structure tails need an ABSOLUTE guard as well as a percentile,
+  because a normally-contango curve's 20th percentile is not an inversion; and
+  the skew direction is a parameter with an explicit warning that testing both
+  modes on one sample is two tests reported as one. 417 tests pass.
 
 - **2026-09-25 (14)** — Cross-session history windows, router tests, and the
   gap that made item 30 unusable from the UI. `/api/backtest/run` now builds the

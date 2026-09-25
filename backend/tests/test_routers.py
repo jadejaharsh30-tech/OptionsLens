@@ -51,12 +51,17 @@ def temp_stores(monkeypatch):
 
     import recorder.store as rstore
     import signals.store as sstore
+    import snapshot_store
     import trading.store as tstore
 
     monkeypatch.setattr(rstore, "MARKET_DATA_DB", paths["market"])
     rstore.init_db(paths["market"])
     sstore.init_db(paths["market"])
     tstore.init_db(paths["market"])
+    # The app store's tables too: an uninitialised file makes every read raise
+    # "no such table", which is a different failure from "no data yet" and
+    # would let a test pass on the wrong error path.
+    snapshot_store.init_db(paths["app"])
     yield paths
 
     for p in paths.values():
@@ -190,7 +195,8 @@ def test_signals_endpoint_lists_every_registered_signal(client):
     r = client.get("/api/backtest/signals", headers=HEADERS)
     assert r.status_code == 200
     ids = {s["signal_id"] for s in r.json()["signals"]}
-    assert {"gex_regime", "oi_short_buildup", "vrp"} <= ids
+    assert {"gex_regime", "oi_short_buildup", "vrp",
+            "term_structure", "skew_rr25"} <= ids
     for s in r.json()["signals"]:
         assert "default_params" in s and "version" in s
 
@@ -218,6 +224,44 @@ def test_run_refuses_when_no_data_is_recorded(client, temp_stores):
                     headers=HEADERS)
     assert r.status_code == 400
     assert "recorder must run" in r.json()["detail"].lower()
+
+
+def test_every_series_backed_signal_is_handed_its_series(temp_stores, monkeypatch):
+    """
+    The regression that made `vrp` appear in the dropdown and skip every bar:
+    the signal was registered, the UI listed it, and the router never passed the
+    series it needs. A signal that silently never fires reads as "no setups
+    today" rather than as a misconfiguration.
+
+    Asserted generically, so a new series-backed signal cannot be added without
+    either being wired in or failing here.
+    """
+    import routers.backtest as rb
+    from signals import skew_signal, term_structure_signal, vrp_signal
+
+    monkeypatch.setattr(rb, "DB_PATH", temp_stores["app"])
+
+    for module in (vrp_signal, term_structure_signal, skew_signal):
+        extras, notes = rb._build_extras("NIFTY", module.SIGNAL_ID)
+        # The stores are empty, so the honest outcome is no series plus a note
+        # that says which one is missing and what to run.
+        assert module.EXTRAS_KEY not in extras
+        assert any(module.SIGNAL_ID in n for n in notes), (
+            f"{module.SIGNAL_ID} has no series and no note explaining why")
+
+
+def test_build_extras_survives_one_leg_failing(temp_stores, monkeypatch):
+    """A broken term-structure read must not also blank the VRP spread."""
+    import routers.backtest as rb
+
+    monkeypatch.setattr(rb, "DB_PATH", temp_stores["app"])
+    monkeypatch.setattr(
+        "term_structure.load_term_structure_history",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+
+    extras, notes = rb._build_extras("NIFTY", "vrp")
+    assert any("could not be loaded" in n for n in notes)
+    assert any("IV/RV" in n for n in notes)       # the VRP pass still ran
 
 
 def test_evaluations_endpoint_works_with_no_history(client, temp_stores):
