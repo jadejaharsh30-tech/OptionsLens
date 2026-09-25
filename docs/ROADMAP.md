@@ -73,7 +73,7 @@ differentiator. This is another reason the recorder is urgent.
 
 ---
 
-## Master checklist — 55 items
+## Master checklist — 63 items
 
 ### Phase 0 — Foundations & correctness — COMPLETE
 
@@ -202,6 +202,73 @@ differentiator. This is another reason the recorder is urgent.
 
 - [x] 54. Router tests — 30 covering auth/validate, recorder, backtest, trades, notify, alert-engine, chain, oi, expiries, with the broker faked via `dependency_overrides` + monkeypatch. Includes a regression for the auth bug that rejected every valid token. Found that `start_scheduler` was not safe to call twice; now guarded
 - [ ] 55. CI (GitHub Actions running pytest), Fyers response caching, recorder supervision/auto-restart, Docker persistence
+
+### Phase 8 — Education & explainability layer
+
+**Why this is a phase and not a README section.** Every number this app shows is
+the output of a deliberate methodological choice, and most of those choices are
+invisible in the number itself. IV Rank is a percentile rather than a range
+because front-expiry IV is mostly the weekly roll. The IV solver returns nothing
+where the price is flat in vol. A backtest verdict reads `NO_EDGE` rather than a
+Sharpe ratio because a number invites talking yourself into it. A user who does
+not know any of that reads the same screen and draws confident wrong conclusions
+— which is the exact failure the codebase spends its effort preventing
+internally. The education layer extends that discipline to the interface.
+
+**The governing constraint: it must be derived from the code, not maintained
+beside it.** The README already drifted (it describes three modules and "36 unit
+tests"), and stale teaching material is worse than none — it teaches the wrong
+thing with the same confidence. So every item below either reads from the code
+or is pinned to it by a test.
+
+- [ ] 56. **Single-source concept glossary** — one structured definition per term
+  (`docs/CONCEPTS.md` plus a machine-readable table the API serves), each entry
+  carrying: what it is, **how THIS project computes it**, the unit, and the trap.
+  Same rule as "ATM IV has one definition": the docs page and the UI tooltip must
+  read the same entry or they will disagree within a month
+- [ ] 57. **Inline explainers on every metric** — an affordance next to each number
+  that pulls its glossary entry. The caveat is the part that matters; "IV Rank:
+  percentile of 30-day constant-maturity IV over 252 sessions" teaches nothing
+  that "IV Rank" did not, while "not (IV−low)/(high−low) — one spike would pin a
+  year of readings near zero" teaches the actual idea
+- [ ] 58. **"Why is this empty?"** — the highest-value piece and the one unique to
+  this codebase. The app deliberately returns `None` in a dozen places: an
+  unidentifiable IV, an unbracketed constant-maturity tenor, a missing far leg, a
+  25-delta wing that did not trade, a thin history, `INSUFFICIENT_DATA`. Today
+  each of those renders as a blank cell. Every one should name the guard that
+  produced it and what would change it. Mostly a **surfacing** job, not new logic:
+  the strings already exist as `SignalResult.reason`, the router notes and the
+  coverage reports
+- [ ] 59. **Task-oriented runbooks** — separate from reference material, because
+  "what is VRP" and "how do I run my first backtest" are different questions.
+  Minimum set: first backtest end to end; the daily operating routine (validate
+  token → recorder runs → check coverage); signal → paper trade → journal; adding
+  an underlying; what to do when the recorder missed a day
+- [ ] 60. **Methodology write-up** — the quant reasoning consolidated in one place:
+  why Black-76 against an implied forward and never spot, why total-variance
+  interpolation, why a vega identifiability gate, why matched nulls, why
+  percentile rank, why paper reuses the backtester's cost model. This is also the
+  portfolio-facing artifact — it is the document that shows the reasoning rather
+  than the wiring. It is already written, scattered across docstrings and this
+  file; consolidating is cheap
+- [ ] 61. **Worked examples using this project's own measured numbers** — the
+  strongest teaching device available here, because the measurements are real and
+  they prove the fix mattered: front-expiry IV swinging 6.80 vol points against
+  2.20 for constant-maturity over the same 29 sessions; a 7DTE deep-ITM contract
+  solving 26.25% against a true 16%; config lot sizes drifted to NIFTY 75 /
+  BANKNIFTY 15 against an exchange 65 / 30, doubling intended risk. Each one
+  teaches the concept and demonstrates the consequence
+- [ ] 62. **"Reading a result honestly"** — statistics literacy specific to this
+  tool. What `NO_EDGE` and `INSUFFICIENT_DATA` actually assert; why the null
+  column is the load-bearing one; why 20 sessions is a plumbing check; why
+  correlated signals are not independent confirmations (`vrp` and
+  `term_structure` share a regime driver); why running both `skew_rr25` modes
+  over one sample is two tests reported as one
+- [ ] 63. **Drift guards** — tests that pin the teaching material to the code, so
+  this phase cannot rot the way the README did. At minimum: every registered
+  signal has a glossary entry; every glossary entry names a symbol that exists;
+  every documented endpoint is routable. The generic `_build_extras` test in
+  `test_routers.py` is the pattern
 
 ---
 

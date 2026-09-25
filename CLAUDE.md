@@ -4,8 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Read this first
 
-**`docs/ROADMAP.md` is the project's durable memory.** It holds the 55-item
-phased checklist (signal research → backtesting → trade lifecycle → notifications),
+**`docs/ROADMAP.md` is the project's durable memory.** It holds the 63-item
+phased checklist (signal research → backtesting → trade lifecycle → notifications
+→ education layer),
 the guiding principles, the CAS regulatory findings, and a progress log. Read it
 at the start of every session and tick items off as they land.
 
