@@ -12,9 +12,10 @@ derived quantity are computed at read time, so that fixing the pricing model
 instead of invalidating it.
 """
 from dataclasses import dataclass, field, asdict
+from datetime import datetime
 from typing import Optional
 
-from market_hours import SessionPhase
+from market_hours import IST, SessionPhase
 
 
 @dataclass(frozen=True)
@@ -76,6 +77,19 @@ class ChainSnapshot:
     futures_expiry: Optional[str] = None
 
     # ── Convenience accessors used by signals ────────────────────────────────
+
+    def observed_at(self) -> datetime:
+        """
+        The instant this snapshot describes, as an IST-aware datetime.
+
+        Anything time-dependent derived from a snapshot — above all time to
+        expiry — must be measured from HERE, never from the wall clock. Measured
+        from now, every historical bar's option has already expired, T is zero,
+        and every IV-derived feature silently comes back None: replay stops
+        matching live the moment the recorded expiry passes.
+        """
+        dt = datetime.fromisoformat(self.ts)
+        return dt if dt.tzinfo else dt.replace(tzinfo=IST)
 
     def strikes(self) -> list[float]:
         return sorted({r.strike for r in self.rows})

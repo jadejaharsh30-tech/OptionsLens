@@ -109,13 +109,19 @@ def horizon_stats(horizon: str, returns: list[Optional[float]],
     )
 
 
-def interpret(stats: BacktestStats, min_sample: int = 30) -> list[str]:
+def interpret(stats: BacktestStats, min_sample: int = 30,
+              unit: str = "bps") -> list[str]:
     """
     Plain-language caveats attached to the result.
 
     Exists so a thin or insignificant result is labelled as such in the output
     itself, rather than relying on whoever reads the table to remember.
+
+    `unit` names what the `*_bps` fields actually hold. In vol mode they carry
+    VOL POINTS, and a note reading "2.8 bps" for a 2.8 vol-point outcome
+    misstates it by two orders of magnitude.
     """
+    label = "vol points" if unit == "vol_points" else "bps"
     notes = []
     for h, s in stats.by_horizon.items():
         if s.n == 0:
@@ -127,7 +133,7 @@ def interpret(stats: BacktestStats, min_sample: int = 30) -> list[str]:
             )
         elif s.t_stat is not None and abs(s.t_stat) < 2.0:
             notes.append(
-                f"{h}: mean {s.mean_bps} bps is {abs(s.t_stat):.2f} standard "
+                f"{h}: mean {s.mean_bps} {label} is {abs(s.t_stat):.2f} standard "
                 f"errors from zero — not distinguishable from noise."
             )
     return notes

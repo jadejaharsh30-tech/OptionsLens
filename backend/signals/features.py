@@ -76,7 +76,9 @@ def compute_features(snapshot: ChainSnapshot,
     from config when the absolute magnitude matters, or leave it at 1 when only
     the sign and the flip level matter (which is usually the case).
     """
-    T = time_to_expiry(snapshot.expiry_date)
+    # From the bar's own timestamp, never the wall clock: measured from now,
+    # every historical option has expired and every IV below comes back None.
+    T = time_to_expiry(snapshot.expiry_date, now=snapshot.observed_at())
     rows = [
         {"strike": r.strike, "option_type": r.option_type, "ltp": r.ltp,
          "bid": r.bid, "ask": r.ask}

@@ -106,6 +106,50 @@ Rows already stored are kept, and only the new symbol's rows are added. The app
 itself only shows symbols listed in `UNDERLYINGS` in `config.py`, and the
 importer only loads those unless given `--symbols`.
 
+## Backtesting signals on this history
+
+The Research page replays the **live recorder's** store, which only holds the
+sessions recorded since the recorder started. To run a signal over this
+archive's two years instead, use the command line from `backend/`:
+
+```
+python -m backtest.cli run --signal vrp --symbol NIFTY
+python -m backtest.cli run --signal term_structure --symbol NIFTY
+python -m backtest.cli run --signal dispersion --symbol NIFTY
+python -m backtest.cli correlation --symbol NIFTY --signals vrp,term_structure,dispersion
+```
+
+The first run rebuilds the archive as one bar per session into
+`eod_snapshots.db` (a separate file on purpose: mixing daily bars into
+`market_data.db` would interleave them with the recorder's minute bars). Later
+runs only add dates you have downloaded since, so the routine update above
+followed by the same command is enough. Signals receive exactly the history the
+Research page would give them.
+
+Override a parameter with `--param`, repeatable:
+
+```
+python -m backtest.cli run --signal skew_rr25 --symbol NIFTY --param mode=momentum
+python -m backtest.cli run --signal vrp --symbol NIFTY --param rich_percentile=90
+```
+
+**Every parameter you try is another test.** The verdict does not know how
+many you ran. Decide the parameters before looking, and treat a result found
+by sweeping as a hypothesis for data you have not used yet, not as a finding.
+
+What will and will not work here:
+
+- `vrp`, `term_structure`, `dispersion`: yes. Their history is the daily IV and
+  closes the importer loaded. `dispersion` is for indices only, and uses
+  whichever members were imported (it says which).
+- `skew_rr25`: yes, but thin. It needs both 25-delta wings traded on the front
+  expiry, which exchange files often do not have.
+- `gex_regime`, `oi_short_buildup`: they run, but read them with care. They
+  were designed for intraday bars with bid and ask; here they see one closing
+  bar per day with neither.
+- `cas_dislocation`: no. It needs the pre-auction and post-auction minutes,
+  which only the live recorder captures.
+
 ## Facts about the data worth remembering
 
 - One row per contract per trading day. There is no bid, no ask and nothing
@@ -127,8 +171,3 @@ importer only loads those unless given `--symbols`.
   must be rebuilt from the futures rows the downloader already stores. Monthly
   signals such as VRP and term structure could usefully start around 2008.
   Weekly-expiry signals only have history from 2016 (BANKNIFTY) and 2019 (NIFTY).
-- **Replaying daily history through the backtester.** This needs an adapter
-  from these rows to `ChainSnapshot`, and a new end-of-day value in
-  `SessionPhase`.
-- **Realized volatility still uses Fyers closes**, with approximate dates.
-  `spot_history` now holds exact exchange closes that could replace them.

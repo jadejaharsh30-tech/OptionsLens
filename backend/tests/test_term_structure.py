@@ -122,7 +122,7 @@ def make_snapshot(session_date: str, rows=None,
     return ChainSnapshot(
         ts=f"{session_date}T15:30:00+05:30", session_date=session_date,
         session_phase=phase, symbol=SYM,
-        expiry_date=_expiry_in(TENOR_DAYS), expiry_epoch=0, spot=SPOT,
+        expiry_date=_expiry_in(TENOR_DAYS, session_date), expiry_epoch=0, spot=SPOT,
         rows=rows if rows is not None else
         (ChainRow(strike=SPOT, option_type="CE", ltp=100.0),),
     )
@@ -235,9 +235,17 @@ def test_todays_reading_is_excluded_from_its_own_percentile():
 
 # ── Risk reversal ─────────────────────────────────────────────────────────────
 
-def _expiry_in(days: float) -> str:
-    """A Fyers-format expiry `days` ahead of now, so T never goes stale."""
-    return (dt.date.today() + dt.timedelta(days=int(days))).strftime("%d-%m-%Y")
+def _expiry_in(days: float, session_date: str) -> str:
+    """
+    A Fyers-format expiry `days` after the SNAPSHOT's own date.
+
+    Relative to the snapshot, never to today. An earlier version used today,
+    which only worked because features measured time to expiry from the wall
+    clock as well — two errors cancelling. Once T is measured from the bar's
+    own timestamp, as it must be for replay to match live, only this is right.
+    """
+    base = dt.date.fromisoformat(session_date)
+    return (base + dt.timedelta(days=int(days))).strftime("%d-%m-%Y")
 
 
 def skewed_chain(skew_slope: float, base_iv: float = 0.18,
@@ -288,6 +296,40 @@ def test_an_unpriceable_chain_yields_no_reading():
     assert rr25_from_snapshot(make_snapshot("2026-06-15", rows=rows)) is None
 
 
+def test_a_historical_bar_prices_as_of_its_own_timestamp_not_today():
+    """
+    The bug this pins: features measured time to expiry from the wall clock, so
+    every historical bar's option had "already expired", T was zero, and every
+    IV-derived feature came back None. Skew could never fire on history, and a
+    gex_regime backtest broke a week after recording, once the weekly expired.
+    """
+    from signals.features import compute_features
+
+    old = "2024-09-02"
+    snap = ChainSnapshot(
+        ts=f"{old}T15:30:00+05:30", session_date=old,
+        session_phase=SessionPhase.END_OF_DAY, symbol=SYM,
+        expiry_date=_expiry_in(TENOR_DAYS, old), expiry_epoch=0, spot=SPOT,
+        rows=skewed_chain(0.6))
+
+    feats = compute_features(snap)
+    assert abs(feats.T - TENOR_DAYS / 365.0) < 1e-6
+    assert feats.forward is not None
+    assert abs(feats.atm_iv - 0.18) < 1e-3          # the IV the chain was priced at
+    assert feats.rr_25d is not None and feats.rr_25d < 0
+
+
+def test_observed_at_assumes_ist_for_a_naive_timestamp():
+    from market_hours import IST
+
+    snap = make_snapshot("2026-06-15")
+    assert snap.observed_at().tzinfo is not None
+    naive = ChainSnapshot(ts="2026-06-15T15:30:00", session_date="2026-06-15",
+                          session_phase=SessionPhase.END_OF_DAY, symbol=SYM,
+                          expiry_date="15-07-2026", expiry_epoch=0, spot=SPOT)
+    assert naive.observed_at().tzinfo == IST
+
+
 def test_skew_series_takes_one_reading_per_session_from_its_last_bar():
     """
     Two bars on one date, different smiles. The closing bar is the one that must
@@ -296,12 +338,12 @@ def test_skew_series_takes_one_reading_per_session_from_its_last_bar():
     early = ChainSnapshot(
         ts="2026-06-15T10:15:00+05:30", session_date="2026-06-15",
         session_phase=SessionPhase.CONTINUOUS, symbol=SYM,
-        expiry_date=_expiry_in(TENOR_DAYS), expiry_epoch=0, spot=SPOT,
+        expiry_date=_expiry_in(TENOR_DAYS, "2026-06-15"), expiry_epoch=0, spot=SPOT,
         rows=skewed_chain(0.2))
     close = ChainSnapshot(
         ts="2026-06-15T15:30:00+05:30", session_date="2026-06-15",
         session_phase=SessionPhase.END_OF_DAY, symbol=SYM,
-        expiry_date=_expiry_in(TENOR_DAYS), expiry_epoch=0, spot=SPOT,
+        expiry_date=_expiry_in(TENOR_DAYS, "2026-06-15"), expiry_epoch=0, spot=SPOT,
         rows=skewed_chain(1.0))
 
     series = build_skew_series([early, close])
@@ -338,7 +380,7 @@ def test_load_skew_history_reads_the_closing_bar_of_each_session():
             write_snapshot(ChainSnapshot(
                 ts=f"{day}T10:15:00+05:30", session_date=day,
                 session_phase=SessionPhase.CONTINUOUS, symbol=SYM,
-                expiry_date=_expiry_in(TENOR_DAYS), expiry_epoch=0, spot=SPOT,
+                expiry_date=_expiry_in(TENOR_DAYS, day), expiry_epoch=0, spot=SPOT,
                 rows=skewed_chain(0.0)), db)
             write_snapshot(make_snapshot(day, rows=skewed_chain(slope)), db)
 
@@ -490,7 +532,7 @@ def _eod_store(tmp: str, dates: list[str], skew_slope=lambda i: 0.6) -> str:
         write_snapshot(ChainSnapshot(
             ts=f"{d}T15:30:00+05:30", session_date=d,
             session_phase=SessionPhase.END_OF_DAY, symbol=SYM,
-            expiry_date=_expiry_in(TENOR_DAYS), expiry_epoch=0,
+            expiry_date=_expiry_in(TENOR_DAYS, d), expiry_epoch=0,
             spot=SPOT * (1.0 + 0.001 * ((i % 7) - 3)),
             rows=skewed_chain(skew_slope(i))), db)
     return db

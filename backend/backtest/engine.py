@@ -243,7 +243,7 @@ def run_backtest(
             for h in horizons
         },
     )
-    stats.notes = interpret(stats)
+    stats.notes = interpret(stats, unit=run.unit)
     run.stats = stats
     run.notes.extend(stats.notes)
 

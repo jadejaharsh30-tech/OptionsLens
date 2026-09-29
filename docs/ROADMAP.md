@@ -314,6 +314,21 @@ or is pinned to it by a test.
 
 Append one line per session. Keep it terse.
 
+- **2026-09-29 (17)** — "How do I run the signals on my real data?" exposed that
+  the Research page cannot: it replays the recorder's store (days), not the
+  bhavcopy history (years). Added `python -m backtest.cli run|correlation`,
+  which materialises the archive incrementally into `eod_snapshots.db` and uses
+  the same series builders as the API (moved from the router into
+  `backtest/extras.py`). Verifying the runbook's claims found a real bug:
+  `compute_features` measured time to expiry from the WALL CLOCK, so on any
+  historical bar T was 0 and every IV-derived feature was None. `skew_rr25`
+  could never have fired on history, and `gex_regime` replays of recorder data
+  silently broke a week after recording. Item-33 tests hid it by building
+  expiries relative to today — two errors cancelling. Now measured from
+  `ChainSnapshot.observed_at()`, with a regression test on a 2024 bar. Also
+  fixed insignificance notes saying "bps" for results in vol points.
+  499 tests pass.
+
 - **2026-09-29 (16)** — Batches B then A: items 15, 34, 35, and the
   prerequisite half of 36. Futures now reach every recorded snapshot, which is
   what made item 34 measurable properly: during the auction the cash book is
