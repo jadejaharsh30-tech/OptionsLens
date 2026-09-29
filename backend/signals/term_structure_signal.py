@@ -79,11 +79,15 @@ def _todays_row(series: list[dict], session_date: str) -> Optional[dict]:
         "steep_percentile":    80.0,
         "inverted_percentile": 20.0,
         "min_observations":    MIN_OBSERVATIONS,
-        # Percentile alone is not enough in either tail, and the two guards are
-        # not symmetric because the curve is not.
+        # Percentile alone is not enough in either tail.
         #
-        # An index curve is in contango almost all the time, so its 20th
-        # percentile can still be a healthy +1.2 vol points. Calling that
+        # Written on the assumption that an index curve is in contango almost
+        # all the time, so its 20th percentile could still be a healthy +1.2
+        # vol points. MEASURED OTHERWISE for NIFTY's 30-to-60-day segment
+        # (2024-09 to 2026-09): the slope is centred near zero and negative on
+        # 53.6% of dates. The guard stays as registered — changing it after
+        # seeing the result would be fitting — but its rationale is weaker
+        # than first stated. See ROADMAP progress log, 2026-09-29 (20). Calling that
         # "inversion" and buying vol on it would be trading a mildly-less-steep
         # normal curve as though it were stress. LONG_VOL therefore requires the
         # slope to be genuinely at or below `max_slope_for_long`.

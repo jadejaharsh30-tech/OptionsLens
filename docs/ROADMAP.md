@@ -314,6 +314,26 @@ or is pinned to it by a test.
 
 Append one line per session. Keep it terse.
 
+- **2026-09-29 (20)** — RE-RUN UNDER THE CIRCULAR-SHIFT TEST, NIFTY, 549
+  sessions, unchanged default parameters. **All three NO_EDGE at every horizon
+  and in both directions.** 20d_vol: `vrp` edge +0.89, p 0.194 (short-vol
+  +0.94 p 0.26, long-vol +1.43 p 0.41); `term_structure` −0.35, p 0.83;
+  `dispersion` +1.29, p 0.18 (195 of 243 fires long-vol, confirming the
+  lopsided mix). Both earlier EDGE verdicts were the t-test. Read as LOW
+  POWER, not as zero edge: two years of one market only resolves large
+  effects. If vrp's +0.89 were real and constant, roughly 2.3x the data would
+  reach p 0.05.
+  **The 2024-09 to 2026-09 period has now been looked at.** Do not tune these
+  three signals on it. Pre-2024 history, once downloadable, is untouched
+  out-of-sample data for them AS THEY ARE — the most valuable test available.
+  Term-structure slope distribution (504 dates, 60d minus 30d): below −1 12.9%,
+  −1..−0.25 25.4%, −0.25..0 15.3%, 0..0.25 15.5%, 0.25..1 28.4%, above 1 2.6%.
+  Smooth and centred near zero: the measurement does not look broken, but the
+  signal's PREMISE ("an index curve is in contango nearly always") is false
+  for NIFTY's 30-to-60-day segment, which is flat on average. Contango shows
+  further out (6-18 months, per the user's curve dump). A different tenor
+  pair would be a NEW hypothesis, to be declared before testing.
+
 - **2026-09-29 (19)** — Verdicts now come from a circular-shift test in daily
   and vol modes; per-direction results added to the CLI, the API and the
   Research page's column. The user's curve check (22-24 Sep) did NOT confirm a
