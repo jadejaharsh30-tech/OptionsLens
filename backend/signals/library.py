@@ -29,6 +29,9 @@ import signals.skew_signal  # noqa: F401,E402
 # declares daily labelling, because its claim is overnight.
 import signals.cas_signal  # noqa: F401,E402
 
+# Implied correlation against a basket of index members (item 35).
+import signals.dispersion_signal  # noqa: F401,E402
+
 
 @register_signal(
     "gex_regime",

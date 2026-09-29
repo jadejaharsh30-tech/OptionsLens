@@ -279,6 +279,20 @@ def test_build_extras_survives_one_leg_failing(temp_stores, monkeypatch):
     assert any("IV/RV" in n for n in notes)       # the VRP pass still ran
 
 
+def test_correlation_refuses_an_unknown_signal(client, temp_stores):
+    r = client.post("/api/backtest/correlation",
+                    json={"symbol": "NIFTY", "signal_ids": ["vrp", "not_a_signal"]},
+                    headers=HEADERS)
+    assert r.status_code == 404
+
+
+def test_correlation_refuses_when_no_data_is_recorded(client, temp_stores):
+    r = client.post("/api/backtest/correlation", json={"symbol": "NIFTY"},
+                    headers=HEADERS)
+    assert r.status_code == 400
+    assert "recorder must run" in r.json()["detail"].lower()
+
+
 def test_evaluations_endpoint_works_with_no_history(client, temp_stores):
     r = client.get("/api/backtest/evaluations/gex_regime", headers=HEADERS)
     assert r.status_code == 200

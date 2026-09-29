@@ -52,3 +52,13 @@ UNDERLYINGS = {
 }
 
 VALID_SYMBOLS = list(UNDERLYINGS.keys())
+
+# Configured stocks that are constituents of each configured index, for the
+# dispersion / implied-correlation series (dispersion.py). A SUBSET of each
+# index, not the index: NIFTY has fifty members and these are five of its
+# largest. The series is therefore a proxy, ranked only against its own history
+# — see dispersion.py for why that is still informative and what it cannot say.
+INDEX_BASKETS = {
+    "NIFTY":     ("RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK"),
+    "BANKNIFTY": ("HDFCBANK", "ICICIBANK"),
+}

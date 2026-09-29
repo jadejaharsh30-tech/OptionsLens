@@ -94,7 +94,16 @@ differentiator. This is another reason the recorder is urgent.
 - [x] 12. Recorder control/status API (`routers/recorder.py`)
 - [x] 13. Record through the CAS window to ~15:40 + tag every snapshot with session phase
 - [x] 14. Official EOD close captured post-CAS at 15:50 via the exchange daily candle, stored separately from intraday LTP. IV snapshot moved 15:20 -> 15:10 so it sits in continuous trading, not inside the auction
-- [ ] 15. Capture futures price per symbol (needed for forward-based IV + basis signals). Daily history exists in the bhavcopy archive's `daily_future` table; the live recorder still does not capture it
+- [x] 15. **Futures capture** — DONE 2026-09-29 (`futures.py`). The recorder writes the
+  front-month future and its expiry onto every snapshot; spot and future share one
+  batched quote call, and a rejected futures symbol drops only itself. The front
+  month is read from the exchange's own option calendar (last listed expiry in a
+  month), never a weekday rule — NSE moved monthly expiry Thursday→Tuesday in 2025.
+  `chain_meta.futures_expiry` is added IN PLACE by `init_db` (the store cannot be
+  rebuilt); older rows read back as not captured. EOD snapshots and
+  `load_basis_history` read the archive's `daily_future`, unused until now.
+  `python -m futures` reports implied carry per symbol. **The Fyers futures symbol
+  format (`NSE:NIFTY26OCTFUT`) is unverified** — see open questions
 - [x] 16. Data-quality monitor (`recorder/quality.py`) — per-session completeness, gap detection, missing trading days, CAS-window coverage flag
 - [ ] 17. Retention/compaction — parquet export + compression for long-term storage
 - [x] 18. Recorder indicator in TopNav — flags 'running but not writing', which a simple on/off light would miss
@@ -123,13 +132,10 @@ differentiator. This is another reason the recorder is urgent.
   20-session realised vol, ranked as a percentile of its own history. IV and RV
   are joined ON DATE, never by position. Look-ahead is controlled by one tested
   function, `observations_before`, which is strictly `<`.
-  **NOT YET SCORED PROPERLY — see the open question on vol-outcome labelling.**
-  The backtester scores every signal by SIGNED UNDERLYING RETURN, which is the
-  wrong target for a volatility signal: a SHORT_VOL position pays when realised
-  vol comes in under implied, not when the index goes up. On 300 synthetic
-  sessions it fires 19% of the time and returns NO_EDGE at every horizon, which
-  only establishes that VRP does not predict direction — something nobody
-  claims. A real verdict needs the vol-outcome labeller
+  Scored on VOL since 2026-09-25 (`backtest/vol_labels.py`) and wired into the
+  Research page (the router builds its series server-side). Still [~] because
+  there is no verdict on REAL data yet — run it now that the bhavcopy import has
+  landed. Remember IV sits on both sides of the test (see open questions)
 - [x] 31. **GEX regime** — implemented as the first registered signal (`signals/library.py`); trades the flip level, not the raw GEX number. NOT yet validated — needs recorded data
 - [ ] 32. **Signed aggressor flow** — Lee-Ready style classification from bid/ask, replacing raw OI%
 - [x] 33. **Term structure & skew** — DONE 2026-09-25. Two signals, both ranked
@@ -155,9 +161,41 @@ differentiator. This is another reason the recorder is urgent.
   monthly-only symbols often lack, so its percentile can end up conditioned on
   the far month having traded. `term_structure.coverage()` reports that per
   symbol and the API surfaces it as a note
-- [ ] 34. **CAS auction dislocation** — 15:15 price vs CAS equilibrium; new since Aug 2026, unexploited
-- [ ] 35. **Dispersion / implied correlation** — index IV vs cap-weighted constituent IV (we already have 5 constituents configured)
-- [ ] 36. Signal ensemble + conflict resolution
+- [x] 34. **CAS auction dislocation** — DONE 2026-09-29 (`cas.py` +
+  `signals/cas_signal.py`, `cas_dislocation.v1`). Last CONTINUOUS bar against first
+  POST_CAS bar, chosen by captured `session_phase`, faded into the next session.
+  Two measures never mixed in one percentile: `raw_bps`, and `adjusted_bps` = raw
+  minus the future's own move over the window (futures trade through the auction,
+  so what remains is the part of the print derivatives did not agree with — the
+  quantity the hypothesis is actually about; its history starts with item 15).
+  The official 15:50 close is NOT the close here — it does not exist when the
+  signal runs at 15:35 — and is joined only as a data check. First signal to
+  **declare** its horizon (`label_mode="daily"` at registration): an overnight
+  claim on minute bars would otherwise be scored on horizons after the close.
+  Needs 60 sessions before it fires; see open questions for the backfill that
+  would shorten that
+- [x] 35. **Dispersion / implied correlation** — DONE 2026-09-29 (`dispersion.py` +
+  `signals/dispersion_signal.py`, `dispersion.v1`). ρ solved from the index's
+  30-day CM IV and its members' (`config.INDEX_BASKETS`), rich → SHORT_VOL index,
+  cheap → LONG_VOL. **A proxy**: five of NIFTY's fifty members, EQUAL weighted
+  (a fixed weight vector across two years would be wrong on nearly every date),
+  so its level is biased both ways — above 1 when the index prices more vol
+  than the basket can produce, below 0 when it sits under the small basket's
+  diversification floor. Kept unclipped; only its percentile is used. The basket
+  is fixed per series (a date missing any member is a gap, never a smaller
+  basket) and chosen from data, so ICICIBANK missing from an import shrinks it
+  once, visibly. Backtest scores the INDEX LEG ONLY — not a dispersion P&L.
+  Realised correlation and the correlation premium ride along as features.
+  `python -m dispersion` reports the basket per index
+- [~] 36. Signal ensemble + conflict resolution. **Prerequisite DONE 2026-09-29:**
+  `backtest/correlation.py` + `POST /api/backtest/correlation` — replays signals
+  exactly as the backtester does, collapses to one reading per session, and
+  gives each pair a word (REDUNDANT / CO_FIRING / DISTINCT / INSUFFICIENT_DATA).
+  A signal and its mirror image are both REDUNDANT (one observation read two
+  ways); SHORT_VOL and BEARISH are never correlated as one claim. The ensemble
+  itself is deliberately NOT built: combining signals none of which has a
+  verdict yet is combining guesses. Build it once the report and real verdicts
+  say which signals are distinct
 - [~] 37. Retire/replace the `SHORT_BUILDUP` heuristic once a measured signal beats it.
   First live run (2026-09-24) fired three BEARISH/BUY-PE alerts on NIFTY 23050-23150 CE
   at 14:39-14:40 during an up-trending session. The rule reads "call OI up + call premium
@@ -275,6 +313,20 @@ or is pinned to it by a test.
 ## Progress log
 
 Append one line per session. Keep it terse.
+
+- **2026-09-29 (16)** — Batches B then A: items 15, 34, 35, and the
+  prerequisite half of 36. Futures now reach every recorded snapshot, which is
+  what made item 34 measurable properly: during the auction the cash book is
+  frozen but futures trade, so the auction print can be separated into "the
+  market moved" and "the auction disagreed with the market". Dispersion
+  surfaced that a five-stock basket biases ρ in BOTH directions, not just
+  upward — found because a test fixture put the index below the two-member
+  diversification floor and got a negative correlation. The correlation report
+  exists because three new vol signals (`vrp`, `term_structure`, `dispersion`)
+  share one regime driver, and an ensemble counting their votes would count the
+  regime three times. Signals can now declare their horizon at registration;
+  the router's per-signal series are a builder map, and the guard test
+  discovers series-backed signals from the registry. 492 tests pass.
 
 - **2026-09-25 (15)** — Item 33: term structure and skew. `term_structure.v1`
   ranks the 60d−30d constant-maturity slope; `skew_rr25.v1` ranks the 25-delta
@@ -427,6 +479,33 @@ Append one line per session. Keep it terse.
 ---
 
 ## Open questions / decisions to revisit
+
+- **Fyers futures symbol format is unverified.** `futures.fyers_future_symbol`
+  builds `NSE:NIFTY26OCTFUT` from Fyers' documented convention; no live response
+  has confirmed it. `GET /api/recorder/status` → `futures.captured` vs `missed`
+  answers it on the first live session: captured > 0 means it works; captured
+  == 0 with missed climbing means the format is wrong, and chains are still
+  being recorded meanwhile (futures=None), so nothing else is lost.
+
+- **Does the first POST_CAS bar see the auction price?** `cas_dislocation`
+  uses the first post-auction bar's spot as the close, because the official
+  close is only captured at 15:50. `load_cas_history` joins `eod_close` and
+  reports the gap as `max_print_gap_bps`; the API surfaces it. It should be
+  about zero. If it is not, the 15:35 bar is reading a pre-auction print and
+  the signal should run one bar later.
+
+- **Backfill CAS sessions from Fyers minute history.** CAS went live 3 Aug
+  2026; the recorder began 24 Sep. `cas_dislocation` needs 60 sessions, so it
+  is silent until roughly late December. The Fyers history API serves 1-minute
+  candles, which would give the 15:14 and 15:35 prints for every session since
+  3 Aug — about 40 sessions immediately. Not built: the minute-candle response
+  cannot be verified from here, and the backfilled rows must be tagged with a
+  source so they are never mistaken for recorder captures.
+
+- **BANKNIFTY dispersion needs ICICIBANK.** Its basket is HDFCBANK + ICICIBANK;
+  with ICICIBANK absent from an import, one member remains and the series is
+  empty (the note says so). Downloading ICICIBANK on the home machine fixes
+  both this and NIFTY's basket, which currently runs on four stocks.
 
 - ~~Vol signals need a vol outcome~~ **DONE 2026-09-25.** `backtest/vol_labels.py`
   scores SHORT_VOL / LONG_VOL by (IV at entry - subsequently realised vol) in

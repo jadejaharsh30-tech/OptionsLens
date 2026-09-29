@@ -255,6 +255,41 @@ def _add_cas_extras(symbol: str, extras: dict, notes: list[str]) -> None:
     extras["cas_series"] = series
 
 
+def _add_dispersion_extras(symbol: str, extras: dict, notes: list[str]) -> None:
+    """
+    Implied correlation of an index against its configured member basket.
+
+    The note names the basket actually used, because a NIFTY series built from
+    four stocks (a member missing from the import) is a different series from
+    one built from five, and nothing else would say so.
+    """
+    from dispersion import load_dispersion_history, summarise
+
+    try:
+        series, info = load_dispersion_history(DB_PATH, symbol)
+    except Exception as e:                       # noqa: BLE001
+        logger.warning(f"Dispersion history unavailable for {symbol}: {e!r}")
+        notes.append(f"Dispersion history could not be loaded: {e}")
+        return
+
+    s = summarise(series, info)
+    if not series:
+        notes.append(
+            f"No implied-correlation history for {symbol}, so dispersion will "
+            f"skip every bar. {s['note']}")
+        return
+
+    excluded = (f" Excluded for thin coverage: {s['excluded']}."
+                if s["excluded"] else "")
+    notes.append(
+        f"Dispersion: {s['observations']} dates from basket {s['basket']}, "
+        f"{s['first_date']} to {s['last_date']}; ρ outside [0, 1] on "
+        f"{s['pct_above_one'] + s['pct_below_zero']:.1f}% of dates (a proxy — "
+        f"read only its percentile)."
+        f"{excluded}")
+    extras["dispersion_series"] = series
+
+
 # Signal-specific series, built only when that signal is run. A series-backed
 # signal missing from this map lists in the dropdown and never fires — the
 # generic test in test_routers.py fails if one is added without an entry.
@@ -262,6 +297,7 @@ _SIGNAL_SERIES = {
     "term_structure":  _add_term_structure_extras,
     "skew_rr25":       _add_skew_extras,
     "cas_dislocation": _add_cas_extras,
+    "dispersion":      _add_dispersion_extras,
 }
 
 
@@ -303,6 +339,60 @@ def run(req: RunRequest, token: str = Depends(get_token)):
     payload = result.to_dict()
     payload["notes"] = extra_notes + payload.get("notes", [])
     return payload
+
+
+class CorrelationRequest(BaseModel):
+    symbol:         str = "NIFTY"
+    signal_ids:     Optional[list[str]] = None     # default: every registered signal
+    session_dates:  Optional[list[str]] = None
+    history_window: int = 60
+
+
+@router.post("/correlation")
+def correlation(req: CorrelationRequest, token: str = Depends(get_token)):
+    """
+    How often the registered signals fire together, and whether they agree.
+
+    The question to answer before combining any of them: three signals agreeing
+    is only three confirmations if they are measuring different things.
+    """
+    from backtest.correlation import correlation_report, session_activity
+
+    ids = req.signal_ids or sorted({s.signal_id for s in list_signals()})
+    for sid in ids:
+        try:
+            get_signal(sid)
+        except KeyError as e:
+            raise HTTPException(404, str(e))
+
+    dates = req.session_dates or recorded_dates(req.symbol)
+    if not dates:
+        raise HTTPException(
+            400, f"No recorded data for {req.symbol}. The recorder must run "
+                 f"during market hours before signals can be compared.")
+
+    # Each signal gets the series it would get in a backtest, built once each.
+    extras: dict[str, Any] = {}
+    notes: list[str] = []
+    for sid in ids:
+        e, n = _build_extras(req.symbol, sid)
+        extras.update(e)
+        notes.extend(x for x in n if x not in notes)
+
+    try:
+        activities = {
+            sid: session_activity(sid, req.symbol, dates, extras=extras,
+                                  history_window=req.history_window)
+            for sid in ids
+        }
+    except Exception as e:
+        logger.exception("Correlation report failed")
+        raise HTTPException(500, f"Correlation report failed: {e}")
+
+    report = correlation_report(activities)
+    report["symbol"] = req.symbol
+    report["notes"] = notes + report["notes"]
+    return report
 
 
 @router.get("/evaluations/{signal_id}")

@@ -88,6 +88,23 @@ class BacktestRun:
         }
 
 
+def should_carry_history(symbol: str, dates: list[str],
+                         db_path: Optional[str] = None) -> bool:
+    """
+    Whether a signal's history window should carry across sessions.
+
+    One bar per session means it must, or the window is always empty and any
+    min_history above zero skips forever. For intraday bars it must NOT:
+    yesterday's last minutes would let an OI-velocity rule match a spike across
+    the overnight gap, where open interest has been restated against a new
+    settlement. Read from the data, and shared with anything else that replays
+    signals, so a replay outside the backtester cannot decide differently.
+    """
+    kwargs = {"db_path": db_path} if db_path else {}
+    counts = session_snapshot_counts(symbol, dates, **kwargs)
+    return bool(counts) and all(c == 1 for c in counts.values())
+
+
 def run_backtest(
     signal_id: str,
     symbol: str,
@@ -115,13 +132,7 @@ def run_backtest(
     dates = session_dates or recorded_dates(symbol, **kwargs)
     dates = sorted(dates)
 
-    # One bar per session means the history window must carry across sessions,
-    # or it is always empty and any min_history above zero skips forever. For
-    # intraday bars it must NOT carry: yesterday's last minutes would let an
-    # OI-velocity rule match a spike across the overnight gap, where open
-    # interest has been restated against a new settlement. Read from the data.
-    counts = session_snapshot_counts(symbol, dates, **kwargs)
-    carry_history = bool(counts) and all(c == 1 for c in counts.values())
+    carry_history = should_carry_history(symbol, dates, db_path)
 
     all_results = []
     session_series: dict[str, tuple[list[str], list[float]]] = {}
