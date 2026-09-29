@@ -10,6 +10,14 @@ phased checklist (signal research → backtesting → trade lifecycle → notifi
 the guiding principles, the CAS regulatory findings, and a progress log. Read it
 at the start of every session and tick items off as they land.
 
+## Working with the user
+
+- The user runs the backend on **Windows, in `cmd.exe`** (not PowerShell), from
+  a `.venv`, sometimes on a work laptop whose data lacks ICICIBANK. Give
+  commands in cmd syntax: `^` for line continuation, double quotes outside and
+  single quotes inside for `python -c`, `set VAR=value` for environment
+  variables.
+
 ## What this is
 
 NSE options market intelligence dashboard: FastAPI backend + React/Vite frontend. Live data comes from the Fyers API v3 via a user-supplied daily access token; all quant math (Black-Scholes, IV, Greeks, GEX, SVI) is implemented from scratch in pure Python — no numpy/scipy/quant libraries.

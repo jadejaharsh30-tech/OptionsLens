@@ -314,6 +314,18 @@ or is pinned to it by a test.
 
 Append one line per session. Keep it terse.
 
+- **2026-09-29 (18)** — FIRST REAL RESULTS, NIFTY, 549 EOD sessions
+  (2024-07 to 2026-09), default parameters, 20d_vol as the pre-declared headline:
+  `vrp` edge +0.89 vol pts (t 2.30, "EDGE"); `term_structure` NO_EDGE at every
+  horizon; `dispersion` edge +1.29 (t 4.33, "EDGE") on a 4-stock basket (no
+  ICICIBANK). Correlation: dispersion × term_structure REDUNDANT (corr −0.55,
+  agreement 0.03 — the same regime read in opposite directions); vrp is
+  DISTINCT from both (lift 1.16 and 0.99). That contradicts my earlier
+  prediction that all three share one regime driver: vrp does not.
+  **Neither EDGE verdict can be trusted yet**: see the open question on
+  overlapping horizons. The t-test treats overlapping 20-session outcomes as
+  independent, and a no-edge simulation shows it says EDGE 35.5% of the time.
+
 - **2026-09-29 (17)** — "How do I run the signals on my real data?" exposed that
   the Research page cannot: it replays the recorder's store (days), not the
   bhavcopy history (years). Added `python -m backtest.cli run|correlation`,
@@ -494,6 +506,38 @@ Append one line per session. Keep it terse.
 ---
 
 ## Open questions / decisions to revisit
+
+- **THE VERDICT IS MISCALIBRATED FOR MULTI-SESSION HORIZONS — fix before
+  trusting any EDGE.** `benchmark.compare` runs a Welch t-test treating every
+  labelled observation as independent. Signals like `vrp` and `dispersion`
+  fire in long runs, and consecutive 20-session outcomes share 19 of 20 days,
+  so 220 fires carry roughly a dozen independent observations. Measured on
+  1,000 simulated worlds with NO edge (549 sessions, persistent percentile
+  signal, overlapping 20-session outcomes): the current verdict says EDGE in
+  **35.5%** of them against a 5% target. Alternatives tried on the same
+  simulation: 20-session block means 0% (overcorrects, no power); Newey-West
+  lag 20-40 about 14% (better, still ~3x); **circular-shift test 7%** (within
+  sampling error of 5%) with 54% power at a 0.5 sd edge. The shift test's null
+  is the signal's OWN firing pattern slid to random offsets in time, which
+  keeps both the run structure and the outcome overlap that the t-test
+  discards. Plan: add it to daily and vol modes and make the verdict read from
+  it. Intraday horizons overlap too (60m on minute bars) and need the same.
+
+- **`term_structure` on NIFTY reads 53.6% of dates as INVERTED.** An index
+  curve is normally in contango; inversion more than half the time over two
+  years is implausible and more likely a measurement problem in the 60-day
+  leg (far-month closes traded early in the day, thin far-month ATM strikes,
+  or extrapolation) than a market fact. Until the per-expiry curve is
+  inspected, its NO_EDGE is not evidence against the hypothesis: a signal
+  built on a broken measurement tests nothing.
+
+- **`dispersion` fired mostly LONG_VOL, and the aggregate hides it.** Its
+  null is negative at every horizon (−1.76 / −1.00 / −0.53), which only
+  happens when the direction mix is mostly long vol (random long-vol days lose
+  the premium). Its signal mean is negative at 5d and 10d. A percentile on a
+  trending series (ρ drifting down) puts most readings in one tail. Results
+  must be split by direction before the edge means anything: "less bad than
+  random long-vol" is not a trade.
 
 - **Fyers futures symbol format is unverified.** `futures.fyers_future_symbol`
   builds `NSE:NIFTY26OCTFUT` from Fyers' documented convention; no live response
