@@ -314,6 +314,16 @@ or is pinned to it by a test.
 
 Append one line per session. Keep it terse.
 
+- **2026-09-29 (19)** — Verdicts now come from a circular-shift test in daily
+  and vol modes; per-direction results added to the CLI, the API and the
+  Research page's column. The user's curve check (22-24 Sep) did NOT confirm a
+  broken 60-day leg: two ordinary upward-sloping days and one genuine stress
+  day (front IV +3 vol points overnight, curve flattened). It did show ~0.2
+  vol points of noise between neighbouring expiries, so many "inverted" days
+  may be a flat curve landing below zero. Checking the slope distribution
+  next. Re-running the first results under the new test is the user's next
+  step. 509 tests pass.
+
 - **2026-09-29 (18)** — FIRST REAL RESULTS, NIFTY, 549 EOD sessions
   (2024-07 to 2026-09), default parameters, 20d_vol as the pre-declared headline:
   `vrp` edge +0.89 vol pts (t 2.30, "EDGE"); `term_structure` NO_EDGE at every
@@ -507,8 +517,13 @@ Append one line per session. Keep it terse.
 
 ## Open questions / decisions to revisit
 
-- **THE VERDICT IS MISCALIBRATED FOR MULTI-SESSION HORIZONS — fix before
-  trusting any EDGE.** `benchmark.compare` runs a Welch t-test treating every
+- ~~THE VERDICT IS MISCALIBRATED FOR MULTI-SESSION HORIZONS~~ **FIXED
+  2026-09-29 for daily and vol modes** (`backtest/significance.py`); the
+  circular-shift test now decides the verdict, results are split by
+  direction, and a seeded test pins both the fix and the old failure (8% vs
+  40% on 60 no-edge worlds). **Intraday is still open** — its horizons overlap
+  too and it still uses the Welch t, with a warning note on every run.
+  Original finding: `benchmark.compare` runs a Welch t-test treating every
   labelled observation as independent. Signals like `vrp` and `dispersion`
   fire in long runs, and consecutive 20-session outcomes share 19 of 20 days,
   so 220 fires carry roughly a dozen independent observations. Measured on

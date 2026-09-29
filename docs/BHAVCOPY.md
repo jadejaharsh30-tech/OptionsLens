@@ -133,6 +133,13 @@ python -m backtest.cli run --signal skew_rr25 --symbol NIFTY --param mode=moment
 python -m backtest.cli run --signal vrp --symbol NIFTY --param rich_percentile=90
 ```
 
+Reading the result: `p` is from a circular-shift test that allows for the
+signal firing on runs of consecutive days and for overlapping multi-day
+outcomes; `EDGE` needs p ≤ 0.05. The "By direction" table tests buy-vol and
+sell-vol (or long and short) fires separately against what that direction
+earned on an average day. Read it whenever a signal fires both ways: a losing
+side can hide inside a winning total.
+
 **Every parameter you try is another test.** The verdict does not know how
 many you ran. Decide the parameters before looking, and treat a result found
 by sweeping as a hypothesis for data you have not used yet, not as a finding.

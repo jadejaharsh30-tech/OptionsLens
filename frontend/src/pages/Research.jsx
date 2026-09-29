@@ -73,7 +73,10 @@ function HorizonTable({ horizons }) {
             <th className="py-2 px-3">MEAN bps</th>
             <th className="py-2 px-3">NULL bps</th>
             <th className="py-2 px-3">EDGE bps</th>
-            <th className="py-2 px-3" title="Welch t on the signal-minus-null difference">t</th>
+            <th className="py-2 px-3"
+                title="p from the circular-shift test where shown (EDGE needs p ≤ 0.05); otherwise a Welch t, which overstates significance on overlapping horizons">
+              p / t
+            </th>
             <th className="py-2 px-3">MAE</th>
             <th className="py-2 px-3">MFE</th>
             <th className="py-2 px-3" style={{ textAlign: 'left' }}>VERDICT</th>
@@ -102,8 +105,11 @@ function HorizonTable({ horizons }) {
                     style={{ color: d.edge_bps > 0 ? '#0D9488' : '#DC2626' }}>
                   {num(d.edge_bps)}
                 </td>
-                <td className="py-2 px-3" style={{ color: '#7A6355' }}>
-                  {num(d.edge_t_stat, 2)}
+                <td className="py-2 px-3" style={{ color: '#7A6355' }}
+                    title={d.test === 'circular_shift' ? 'circular-shift p-value' : 'Welch t (not overlap-corrected)'}>
+                  {d.test === 'circular_shift'
+                    ? `p ${num(d.shift_p, 3)}`
+                    : `t ${num(d.edge_t_stat, 2)}`}
                 </td>
                 <td className="py-2 px-3" style={{ color: '#DC2626' }}>
                   {num(d.signal?.mean_mae_bps, 1)}

@@ -28,6 +28,7 @@ from backtest.vol_labels import (
     iv_by_date_from_extras, vol_horizon_keys,
 )
 from backtest.metrics import BacktestStats, horizon_stats, interpret
+from backtest.significance import ALPHA, circular_shift_test, horizon_sessions
 from backtest.replay import replay_range
 from market_hours import IST
 from recorder.store import recorded_dates, session_snapshot_counts
@@ -57,6 +58,11 @@ class BacktestRun:
     comparison:    dict[str, BenchmarkComparison] = field(default_factory=dict)
     notes:         list[str] = field(default_factory=list)
     generated_at:  str = ""
+    # Results split by the direction of the fire. A signal that fires both
+    # ways can hide a losing side inside a winning aggregate — dispersion's
+    # first real run was mostly long-vol fires that lost less than random
+    # long-vol days, which the aggregate edge reported as an edge.
+    by_direction:  dict[str, dict] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -81,10 +87,15 @@ class BacktestRun:
                     "null":   vars(c.null),
                     "edge_bps":    c.edge_bps,
                     "edge_t_stat": c.edge_t_stat,
+                    "test":        c.test,
+                    "shift_edge":  c.shift_edge,
+                    "shift_p":     c.shift_p,
+                    "shift_offsets": c.shift_offsets,
                     "verdict":     c.verdict(),
                 }
                 for h, c in self.comparison.items()
             },
+            "by_direction": self.by_direction,
         }
 
 
@@ -229,6 +240,12 @@ def run_backtest(
 
     run.comparison = compare(signal_labels, null_labels, horizons)
 
+    if resolved_mode in ("daily", "vol"):
+        signs, outcomes, names = _session_outcomes(
+            resolved_mode, fired_entries, session_series, symbol, extras, horizons)
+        _apply_shift_tests(run, signs, outcomes)
+        run.by_direction = _by_direction(signs, outcomes, names)
+
     stats = BacktestStats(
         signal_id = spec.signal_id,
         version   = spec.version,
@@ -246,6 +263,23 @@ def run_backtest(
     stats.notes = interpret(stats, unit=run.unit)
     run.stats = stats
     run.notes.extend(stats.notes)
+
+    if resolved_mode in ("daily", "vol"):
+        run.notes.append(
+            "Verdicts use a circular-shift test: the signal's own firing pattern "
+            "slid to every non-overlapping point in time. It keeps the runs of "
+            "consecutive fires and the overlap of multi-session outcomes, which "
+            "a t-test would count as independent evidence. The old t-statistic "
+            "stays in the response for comparison but no longer decides the "
+            "verdict."
+        )
+    else:
+        run.notes.append(
+            "Intraday verdicts still use a Welch t-test, which treats "
+            "overlapping horizons as independent and OVERSTATES significance "
+            "(measured at ~7x on daily horizons). Treat an intraday EDGE as a "
+            "lead, not a result."
+        )
 
     if resolved_mode == "daily":
         run.notes.append(
@@ -394,3 +428,114 @@ def _label_vol(fired_entries, session_series, symbol,
     null_labels = build_vol_null_labels(picks, dates, closes, iv_by_date,
                                         symbol, null_directions)
     return signal_labels, null_labels, vol_horizon_keys(), None
+
+
+# ── Overlap-aware significance ───────────────────────────────────────────────
+
+_DIRECTION_NAMES = {
+    "vol":   {1: "SHORT_VOL", -1: "LONG_VOL"},
+    "daily": {1: "BULLISH",   -1: "BEARISH"},
+}
+
+
+def _session_outcomes(mode, fired_entries, session_series, symbol, extras,
+                      horizons):
+    """
+    Per-session fire signs, and per-horizon outcomes for EVERY session.
+
+    The shift test needs the outcome of sessions the signal did not fire on,
+    because its null is the same firing pattern placed elsewhere. Outcomes are
+    computed by the same labellers as the signal's own labels, for a +1
+    position (SHORT_VOL in vol mode, long in daily mode), so a fire's labelled
+    result is exactly sign × outcome.
+    """
+    dates = sorted(session_series)
+    closes = [session_series[d][1][-1] for d in dates]
+    index_of = {d: i for i, d in enumerate(dates)}
+
+    signs = [0] * len(dates)
+    for session_date, _ts, sign, name in fired_entries:
+        i = index_of.get(session_date)
+        if i is None or signs[i]:
+            continue                      # first fire of the session only
+        if mode == "vol":
+            signs[i] = 1 if name == "SHORT_VOL" else -1
+        else:
+            signs[i] = sign
+
+    outcomes = {h: [None] * len(dates) for h in horizons}
+    iv_by_date = iv_by_date_from_extras(extras) if mode == "vol" else {}
+    for i in range(len(dates)):
+        if mode == "vol":
+            lab = compute_vol_outcome(i, dates, closes, iv_by_date, symbol,
+                                      "SHORT_VOL")
+        else:
+            lab = compute_daily_forward_returns(i, dates, closes, symbol,
+                                                direction=1)
+        if lab is None:
+            continue
+        for h in horizons:
+            outcomes[h][i] = lab.returns_bps.get(h)
+    return signs, outcomes, _DIRECTION_NAMES[mode]
+
+
+def _apply_shift_tests(run: "BacktestRun", signs, outcomes) -> None:
+    for h, cmp_ in run.comparison.items():
+        sessions = horizon_sessions(h)
+        if sessions is None:
+            continue
+        t = circular_shift_test(signs, outcomes[h], sessions)
+        cmp_.shift_edge, cmp_.shift_p = t.edge, t.p_value
+        cmp_.shift_offsets = t.n_offsets
+        cmp_.test = "circular_shift"
+        cmp_.beats_null = cmp_.verdict() == "EDGE"
+
+
+def _direction_verdict(n: int, edge, p) -> str:
+    if n < 30:
+        return "INSUFFICIENT_DATA"
+    if p is None or edge is None:
+        return "INSUFFICIENT_DATA"
+    if p > ALPHA:
+        return "NO_EDGE"
+    return "EDGE" if edge > 0 else "INVERSE_EDGE"
+
+
+def _by_direction(signs, outcomes, names) -> dict[str, dict]:
+    """
+    Each direction's fires tested on their own.
+
+    `baseline` is what that direction earned on an average session — for
+    SHORT_VOL the variance risk premium itself, for LONG_VOL its negative — so
+    a long-vol signal with a negative mean can still beat its baseline, and
+    this table says so instead of letting a mostly-short-vol aggregate imply it.
+    """
+    out: dict[str, dict] = {}
+    for sign, name in names.items():
+        own = [s if s == sign else 0 for s in signs]
+        if not any(own):
+            continue
+        per_h = {}
+        for h, ys in outcomes.items():
+            sessions = horizon_sessions(h)
+            vals = [v for v in ys if v is not None]
+            fired = [sign * v for s, v in zip(own, ys) if s and v is not None]
+            if not vals or not fired:
+                per_h[h] = {"n": len(fired), "mean": None, "baseline": None,
+                            "edge": None, "shift_p": None,
+                            "verdict": "INSUFFICIENT_DATA"}
+                continue
+            baseline = sign * sum(vals) / len(vals)
+            t = circular_shift_test(own, ys, sessions or 1)
+            mean = sum(fired) / len(fired)
+            # The shift edge for a one-direction pattern is mean − baseline.
+            per_h[h] = {
+                "n": len(fired),
+                "mean": round(mean, 4),
+                "baseline": round(baseline, 4),
+                "edge": round(mean - baseline, 4),
+                "shift_p": t.p_value,
+                "verdict": _direction_verdict(len(fired), t.edge, t.p_value),
+            }
+        out[name] = {"fires": sum(1 for s in own if s), "horizons": per_h}
+    return out

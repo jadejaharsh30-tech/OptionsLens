@@ -25,6 +25,7 @@ from backtest.labels import (
     compute_forward_returns, horizon_keys,
 )
 from backtest.metrics import HorizonStats, horizon_stats
+from backtest.significance import ALPHA
 
 
 @dataclass
@@ -36,10 +37,24 @@ class BenchmarkComparison:
     edge_bps:        Optional[float] = None     # signal mean minus null mean
     edge_t_stat:     Optional[float] = None     # Welch t on the difference
     beats_null:      bool = False
+    # Set for multi-session horizons, where overlapping outcomes make the Welch
+    # t-test overstate significance (35.5% false EDGE on no-edge simulations).
+    # When present, the verdict reads from these and the t-stat is kept only
+    # for comparison. See backtest/significance.py.
+    shift_edge:      Optional[float] = None
+    shift_p:         Optional[float] = None
+    shift_offsets:   int = 0
+    test:            str = "welch"              # "welch" or "circular_shift"
 
     def verdict(self) -> str:
         if self.signal.n < 30:
             return "INSUFFICIENT_DATA"
+        if self.test == "circular_shift":
+            if self.shift_p is None or self.shift_edge is None:
+                return "INSUFFICIENT_DATA"
+            if self.shift_p > ALPHA:
+                return "NO_EDGE"
+            return "EDGE" if self.shift_edge > 0 else "INVERSE_EDGE"
         if self.edge_t_stat is None:
             return "INDETERMINATE"
         if abs(self.edge_t_stat) < 2.0:
