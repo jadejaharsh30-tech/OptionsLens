@@ -35,6 +35,30 @@ def fetch_quote(fyers, symbol_key: str) -> float:
     return resp["d"][0]["v"]["lp"]
 
 
+def fetch_quotes(fyers, fyers_symbols: list[str]) -> dict[str, float]:
+    """
+    Last traded price for several Fyers symbols in ONE call.
+
+    Returns {symbol: ltp} for the symbols that quoted; a symbol Fyers rejects
+    (per-entry `s != "ok"`, or no price) is simply absent rather than raising,
+    so an unknown futures symbol cannot cost the caller the spot quote it asked
+    for in the same request. Raises only when the whole call fails.
+    """
+    resp = fyers.quotes({"symbols": ",".join(fyers_symbols)})
+    if resp.get("s") == "error":
+        raise ValueError(f"Fyers quotes error for {fyers_symbols}: {resp}")
+
+    out: dict[str, float] = {}
+    for entry in resp.get("d", []) or []:
+        if entry.get("s", "ok") != "ok":
+            continue
+        name = entry.get("n")
+        lp = (entry.get("v") or {}).get("lp")
+        if name and isinstance(lp, (int, float)) and lp > 0:
+            out[name] = float(lp)
+    return out
+
+
 def fetch_expiry_list(fyers, symbol_key: str) -> list[dict]:
     """
     Fetch all available expiries for an underlying.

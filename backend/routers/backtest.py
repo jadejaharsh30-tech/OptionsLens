@@ -23,7 +23,6 @@ from backtest.walkforward import describe_data_sufficiency
 from config import DB_PATH
 from recorder.store import recorded_dates
 from signals.registry import get_signal, list_signals
-from signals.skew_signal import SIGNAL_ID as SKEW_SIGNAL_ID
 from signals.store import evaluation_summary
 
 router = APIRouter(prefix="/api/backtest", tags=["backtest"])
@@ -113,19 +112,18 @@ def _build_extras(symbol: str, signal_id: Optional[str] = None,
     silently skips every bar for want of a series is the least debuggable
     outcome there is.
 
-    The VRP and term-structure series are a SQL read plus interpolation, so they
-    are always built — `iv_series` in particular is what vol labelling scores
-    any volatility signal against, whichever one is being run. The skew series
-    solves IV across a whole chain per session, so it is built only for the
-    signal that consumes it rather than charged to every run.
+    The VRP series is always built: `iv_series` is what vol labelling scores
+    ANY volatility signal against, whichever one is being run. Every other
+    series is built only for the signal that consumes it (`_SIGNAL_SERIES`), so
+    a chain-wide IV solve for skew is not charged to a gex_regime run.
     """
     extras: dict[str, Any] = {}
     notes: list[str] = []
 
     _add_vrp_extras(symbol, extras, notes)
-    _add_term_structure_extras(symbol, extras, notes)
-    if signal_id == SKEW_SIGNAL_ID:
-        _add_skew_extras(symbol, extras, notes)
+    builder = _SIGNAL_SERIES.get(signal_id or "")
+    if builder is not None:
+        builder(symbol, extras, notes)
     return extras, notes
 
 
@@ -220,6 +218,51 @@ def _add_skew_extras(symbol: str, extras: dict, notes: list[str]) -> None:
         f"Skew history: {info['observations']} sessions, {info['first_date']} "
         f"to {info['last_date']}, {info['pct_negative']}% with puts bid.")
     extras["skew_series"] = series
+
+
+def _add_cas_extras(symbol: str, extras: dict, notes: list[str]) -> None:
+    """
+    Closing-auction readings from the recorder's own bars.
+
+    Reports how many sessions carry the futures-adjusted measure separately,
+    because the signal ranks one measure at a time and the adjusted one only
+    starts accumulating with futures capture.
+    """
+    from cas import load_cas_history, summarise
+
+    try:
+        series = load_cas_history(symbol)
+    except Exception as e:                       # noqa: BLE001
+        logger.warning(f"CAS history unavailable for {symbol}: {e!r}")
+        notes.append(f"CAS history could not be loaded: {e}")
+        return
+
+    if not series:
+        notes.append(
+            f"No closing-auction readings for {symbol}, so cas_dislocation will "
+            f"skip every bar. The recorder must capture both the last continuous "
+            f"bar and a post-auction bar (run it through 15:40).")
+        return
+
+    info = summarise(series)
+    gap = (f" Post-auction print vs official close: at most "
+           f"{info['max_print_gap_bps']} bps over {info['checked_against_official']} "
+           f"sessions." if info["max_print_gap_bps"] is not None else "")
+    notes.append(
+        f"CAS history: {info['observations']} sessions ({info['with_futures']} "
+        f"with the futures-adjusted measure), {info['first_date']} to "
+        f"{info['last_date']}.{gap}")
+    extras["cas_series"] = series
+
+
+# Signal-specific series, built only when that signal is run. A series-backed
+# signal missing from this map lists in the dropdown and never fires — the
+# generic test in test_routers.py fails if one is added without an entry.
+_SIGNAL_SERIES = {
+    "term_structure":  _add_term_structure_extras,
+    "skew_rr25":       _add_skew_extras,
+    "cas_dislocation": _add_cas_extras,
+}
 
 
 @router.post("/run")

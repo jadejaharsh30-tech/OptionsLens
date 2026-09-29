@@ -67,8 +67,13 @@ class ChainSnapshot:
     expiry_date:   str            # DD-MM-YYYY, as Fyers reports it
     expiry_epoch:  int
     spot:          float
-    futures:       Optional[float] = None   # populated once futures capture lands
-    rows:          tuple[ChainRow, ...] = field(default_factory=tuple)
+    # Front-month future and its expiry (DD-MM-YYYY). The expiry travels with
+    # the price because the option expiry above is usually a WEEKLY and says
+    # nothing about which monthly contract was quoted — without it, basis could
+    # not be annualised after the fact. None when the quote was unavailable.
+    futures:        Optional[float] = None
+    rows:           tuple[ChainRow, ...] = field(default_factory=tuple)
+    futures_expiry: Optional[str] = None
 
     # ── Convenience accessors used by signals ────────────────────────────────
 

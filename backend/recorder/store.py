@@ -91,6 +91,13 @@ def init_db(db_path: str = MARKET_DATA_DB):
             )
         """)
 
+        # Columns added after the first release. `CREATE TABLE IF NOT EXISTS`
+        # never alters an existing table, and this store is append-only and
+        # irreplaceable, so new columns are added in place rather than by
+        # rebuilding. Nullable, so every row recorded before the column existed
+        # reads as "not captured" — which is exactly what it was.
+        _add_missing_columns(c, "chain_meta", {"futures_expiry": "TEXT"})
+
         # Replay path: "give me symbol X on date D in time order"
         c.execute("""
             CREATE INDEX IF NOT EXISTS idx_chain_rows_replay
@@ -107,6 +114,14 @@ def init_db(db_path: str = MARKET_DATA_DB):
         """)
 
 
+def _add_missing_columns(cursor, table: str, columns: dict[str, str]) -> None:
+    """ALTER TABLE ADD COLUMN for each column the table does not have yet."""
+    existing = {row[1] for row in cursor.execute(f"PRAGMA table_info({table})")}
+    for name, decl in columns.items():
+        if name not in existing:
+            cursor.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+
+
 def write_snapshot(snapshot: ChainSnapshot, db_path: str = MARKET_DATA_DB) -> int:
     """
     Persist one snapshot. Returns rows written.
@@ -121,12 +136,14 @@ def write_snapshot(snapshot: ChainSnapshot, db_path: str = MARKET_DATA_DB) -> in
         conn.execute("""
             INSERT OR IGNORE INTO chain_meta
                 (ts, session_date, session_phase, symbol,
-                 expiry_date, expiry_epoch, spot, futures, row_count)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 expiry_date, expiry_epoch, spot, futures, row_count,
+                 futures_expiry)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             snapshot.ts, snapshot.session_date, snapshot.session_phase.value,
             snapshot.symbol, snapshot.expiry_date, snapshot.expiry_epoch,
             snapshot.spot, snapshot.futures, len(snapshot.rows),
+            snapshot.futures_expiry,
         ))
 
         cur = conn.executemany("""
@@ -197,6 +214,7 @@ def _snapshot_from_meta(conn, meta) -> ChainSnapshot:
         expiry_epoch  = meta["expiry_epoch"],
         spot          = meta["spot"],
         futures       = meta["futures"],
+        futures_expiry = meta["futures_expiry"],
         rows          = tuple(ChainRow(**dict(r)) for r in rows),
     )
 

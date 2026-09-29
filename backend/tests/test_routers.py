@@ -236,18 +236,33 @@ def test_every_series_backed_signal_is_handed_its_series(temp_stores, monkeypatc
     Asserted generically, so a new series-backed signal cannot be added without
     either being wired in or failing here.
     """
+    import importlib
+
     import routers.backtest as rb
-    from signals import skew_signal, term_structure_signal, vrp_signal
+    import signals.library  # noqa: F401 — populate the registry
+    from signals.registry import list_signals
 
     monkeypatch.setattr(rb, "DB_PATH", temp_stores["app"])
+    import config
+    monkeypatch.setattr(config, "MARKET_DATA_DB", temp_stores["market"])
 
-    for module in (vrp_signal, term_structure_signal, skew_signal):
+    # Discovered from the registry, not listed by hand: any signal module that
+    # declares an EXTRAS_KEY is series-backed and must be wired in.
+    series_backed = []
+    for spec in list_signals():
+        module = importlib.import_module(spec.fn.__module__)
+        if hasattr(module, "EXTRAS_KEY"):
+            series_backed.append(module)
+    assert len(series_backed) >= 4
+
+    for module in series_backed:
         extras, notes = rb._build_extras("NIFTY", module.SIGNAL_ID)
         # The stores are empty, so the honest outcome is no series plus a note
         # that says which one is missing and what to run.
         assert module.EXTRAS_KEY not in extras
         assert any(module.SIGNAL_ID in n for n in notes), (
-            f"{module.SIGNAL_ID} has no series and no note explaining why")
+            f"{module.SIGNAL_ID} has no series and no note explaining why — is "
+            f"it missing from routers/backtest._SIGNAL_SERIES?")
 
 
 def test_build_extras_survives_one_leg_failing(temp_stores, monkeypatch):
@@ -259,8 +274,8 @@ def test_build_extras_survives_one_leg_failing(temp_stores, monkeypatch):
         "term_structure.load_term_structure_history",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
 
-    extras, notes = rb._build_extras("NIFTY", "vrp")
-    assert any("could not be loaded" in n for n in notes)
+    extras, notes = rb._build_extras("NIFTY", "term_structure")
+    assert any("Term-structure history could not be loaded" in n for n in notes)
     assert any("IV/RV" in n for n in notes)       # the VRP pass still ran
 
 

@@ -96,6 +96,7 @@ def iter_eod_snapshots(symbol: str, session_date: str,
             WHERE symbol = ? AND trad_dt = ? AND expiry_dt > trad_dt
             ORDER BY expiry_dt, strike, option_type
         """, (symbol.upper(), session_date)).fetchall()
+        futures, futures_expiry = _front_future(conn, symbol, session_date)
     except sqlite3.Error:
         return
     finally:
@@ -142,8 +143,33 @@ def iter_eod_snapshots(symbol: str, session_date: str,
             expiry_date=_fyers_expiry(expiry),
             expiry_epoch=_expiry_epoch(expiry),
             spot=spot,
+            futures=futures,
+            futures_expiry=futures_expiry,
             rows=tuple(by_expiry[expiry]),
         )
+
+
+def _front_future(conn, symbol: str, session_date: str,
+                  ) -> tuple[Optional[float], Optional[str]]:
+    """
+    The front-month future's close and expiry for one date, or (None, None).
+
+    Same rules as `futures.load_basis_history`: not yet expiring, and actually
+    traded, because an untraded contract republishes yesterday's close. An
+    archive predating `daily_future` simply yields no futures.
+    """
+    try:
+        row = conn.execute("""
+            SELECT expiry_dt, close FROM daily_future
+            WHERE symbol = ? AND trad_dt = ? AND expiry_dt > trad_dt
+              AND close > 0 AND volume > 0
+            ORDER BY expiry_dt LIMIT 1
+        """, (symbol.upper(), session_date)).fetchone()
+    except sqlite3.Error:
+        return None, None
+    if not row:
+        return None, None
+    return float(row[1]), _fyers_expiry(row[0])
 
 
 def available_dates(symbol: str, src_db: str = NSE_EOD_DB) -> list[str]:

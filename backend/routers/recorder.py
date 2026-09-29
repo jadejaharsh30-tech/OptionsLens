@@ -115,6 +115,13 @@ def status(token: str = Depends(get_token)):
         "snapshots_written":  recorder_state.snapshots_written,
         "consecutive_errors": recorder_state.consecutive_errors,
         "last_error":         recorder_state.last_error,
+        # Futures are best-effort. captured == 0 with missed > 0 means the
+        # Fyers futures symbol format is wrong, not that the market is quiet.
+        "futures": {
+            "captured":     recorder_state.futures_captured,
+            "missed":       recorder_state.futures_missed,
+            "last_symbols": recorder_state.last_futures_symbol,
+        },
         "config": {
             "symbols":      cfg.symbols,
             "interval_sec": cfg.interval_sec,

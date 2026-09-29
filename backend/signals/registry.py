@@ -35,6 +35,13 @@ class SignalSpec:
     # Evaluating below this produces a "warming up" skip rather than a result
     # computed from too little data.
     min_history:    int = 0
+    # The horizon family the HYPOTHESIS is about, when it cannot be read from
+    # the data. A closing-auction reversal is an overnight claim evaluated on
+    # intraday bars; left to auto-detection those bars would be scored on
+    # 5-60 minute horizons that all fall after the session has ended. Declared
+    # once at registration and versioned with the signal — this chooses what
+    # question is asked, it never tunes a horizon to the answer.
+    label_mode:     Optional[str] = None
 
     @property
     def key(self) -> str:
@@ -70,7 +77,7 @@ _REGISTRY: dict[str, SignalSpec] = {}
 
 def register_signal(signal_id: str, version: int = 1, description: str = "",
                     default_params: Optional[dict[str, Any]] = None,
-                    min_history: int = 0):
+                    min_history: int = 0, label_mode: Optional[str] = None):
     """
     Decorator registering a signal function.
 
@@ -88,6 +95,7 @@ def register_signal(signal_id: str, version: int = 1, description: str = "",
             description    = description or (fn.__doc__ or "").strip().split("\n")[0],
             default_params = default_params or {},
             min_history    = min_history,
+            label_mode     = label_mode,
         )
         if spec.key in _REGISTRY:
             raise ValueError(f"Signal {spec.key} is already registered.")

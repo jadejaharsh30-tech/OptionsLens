@@ -25,6 +25,10 @@ import signals.vrp_signal  # noqa: F401,E402
 import signals.term_structure_signal  # noqa: F401,E402
 import signals.skew_signal  # noqa: F401,E402
 
+# The closing-auction dislocation (item 34) — reads the recorder's own bars and
+# declares daily labelling, because its claim is overnight.
+import signals.cas_signal  # noqa: F401,E402
+
 
 @register_signal(
     "gex_regime",

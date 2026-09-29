@@ -21,7 +21,8 @@ from datetime import datetime
 from typing import Optional
 
 from config import UNDERLYINGS
-from fyers_client import fetch_option_chain, fetch_expiry_list, fetch_quote, get_fyers
+from futures import front_month_expiry, fyers_future_symbol
+from fyers_client import fetch_option_chain, fetch_expiry_list, fetch_quotes, get_fyers
 from market_hours import (
     SessionPhase, get_session_phase, is_recording_window,
     now_ist, seconds_until_next_tick,
@@ -54,6 +55,13 @@ class RecorderState:
     consecutive_errors: int = 0
     last_error:         Optional[str] = None
     config:             Optional[RecorderConfig] = None
+    # Futures are best-effort, so their health is tracked separately: a chain
+    # recorded without its future is still worth keeping, but a recorder that
+    # has never once captured a future has a symbol-format problem.
+    futures_captured:   int = 0
+    futures_missed:     int = 0
+    last_futures_symbol: dict = field(default_factory=dict)
+    futures_warned:     set = field(default_factory=set)
 
 
 recorder_state = RecorderState()
@@ -72,10 +80,13 @@ def _capture_symbol(fyers, symbol: str, cfg: RecorderConfig) -> list[ChainSnapsh
     ts = now.replace(microsecond=0).isoformat()
     phase = get_session_phase(now)
 
-    spot = fetch_quote(fyers, symbol)
+    # Expiries first: the front-month future is found from the option calendar,
+    # and knowing it lets spot and futures share one quote call.
     expiries = fetch_expiry_list(fyers, symbol)
     if not expiries:
         return []
+
+    spot, fut_price, fut_expiry = _quote_spot_and_future(fyers, symbol, expiries, now)
 
     snapshots: list[ChainSnapshot] = []
     for exp in expiries[:cfg.expiry_depth]:
@@ -108,11 +119,52 @@ def _capture_symbol(fyers, symbol: str, cfg: RecorderConfig) -> list[ChainSnapsh
             expiry_date   = exp["date"],
             expiry_epoch  = exp["expiry"],
             spot          = spot,
-            futures       = None,   # TODO(roadmap 15): needs Fyers futures symbol format
+            futures       = fut_price,
+            futures_expiry = fut_expiry,
             rows          = rows,
         ))
 
     return snapshots
+
+
+def _quote_spot_and_future(fyers, symbol: str, expiries: list[dict], now,
+                           ) -> tuple[float, Optional[float], Optional[str]]:
+    """
+    Spot and front-month future in one quote call.
+
+    Spot failing is fatal for the poll, exactly as before — there is no chain
+    worth recording without it. The future failing is not: the snapshot is
+    still written with `futures=None`, and the miss is counted so a wrong
+    symbol format is visible on the status endpoint instead of silently
+    producing a column of nulls for months.
+    """
+    spot_sym = UNDERLYINGS[symbol]["symbol"]
+    expiry = front_month_expiry([e.get("date") for e in expiries], now=now)
+    fut_sym = fyers_future_symbol(symbol, expiry) if expiry else None
+
+    quotes = fetch_quotes(fyers, [spot_sym] + ([fut_sym] if fut_sym else []))
+    if spot_sym not in quotes:
+        raise ValueError(f"No spot quote for {symbol} ({spot_sym})")
+
+    fut_price = quotes.get(fut_sym) if fut_sym else None
+    _count_future(symbol, fut_sym, fut_price)
+    fut_expiry = expiry.strftime("%d-%m-%Y") if (expiry and fut_price) else None
+    return quotes[spot_sym], fut_price, fut_expiry
+
+
+def _count_future(symbol: str, fut_sym: Optional[str], price: Optional[float]) -> None:
+    """Tally futures captures and warn once per symbol per run on a miss."""
+    recorder_state.last_futures_symbol[symbol] = fut_sym
+    if price is not None:
+        recorder_state.futures_captured += 1
+        return
+    recorder_state.futures_missed += 1
+    if symbol not in recorder_state.futures_warned:
+        recorder_state.futures_warned.add(symbol)
+        logger.warning(
+            f"Recorder: no futures quote for {symbol} (tried {fut_sym!r}). Chains "
+            f"are still recorded, with futures=None. If this repeats for every "
+            f"symbol the Fyers futures symbol format in futures.py is wrong.")
 
 
 def _persist(snapshots: list[ChainSnapshot], db_path: str) -> int:
@@ -136,6 +188,9 @@ async def recorder_task(token: str, cfg: RecorderConfig):
     recorder_state.started_at = now_ist()
     recorder_state.config     = cfg
     recorder_state.last_error = None
+    # Warn afresh each run: a restart after fixing the symbol format should
+    # report whether the fix worked, not stay silent from the last run.
+    recorder_state.futures_warned = set()
 
     logger.info(
         f"Recorder started — symbols: {cfg.symbols} | "

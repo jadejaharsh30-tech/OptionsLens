@@ -36,6 +36,11 @@ CONTINUOUS_CASH_CLOSE = time(15, 15)   # CAS: cash trading stops here for F&O st
 CAS_WINDOW_END        = time(15, 35)   # auction equilibrium price finalised
 DERIVATIVES_CLOSE     = time(15, 40)   # options/futures stop trading
 
+# First session under the closing auction. Before it, 15:15-15:35 was ordinary
+# continuous trading, so a "pre-auction versus close" gap on an earlier date is
+# twenty minutes of return, not an auction effect.
+CAS_LIVE_DATE = date(2026, 8, 3)
+
 # The moment an expiring contract stops having time value. Index options have
 # conventionally expired at 15:30 IST; CAS did not move this, but confirm
 # against the NSE circular if settlement timing is ever material to a signal.

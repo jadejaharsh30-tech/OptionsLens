@@ -158,7 +158,11 @@ def run_backtest(
     vol_family = bool(fired_entries) and all(
         name in VOL_DIRECTIONS for _, _, _, name in fired_entries)
 
-    if label_mode == "auto":
+    # Precedence: an explicit argument, then the horizon the signal DECLARED at
+    # registration, then what the fired directions and bar frequency imply.
+    if label_mode == "auto" and spec.label_mode:
+        resolved_mode = spec.label_mode
+    elif label_mode == "auto":
         if vol_family:
             resolved_mode = "vol"
         else:
