@@ -36,6 +36,7 @@ from datetime import datetime
 from typing import Iterator, Optional
 
 from config import NSE_EOD_DB
+from dbutil import open_existing
 from market_hours import EXPIRY_TIME_IST, IST, SessionPhase
 from recorder.models import ChainRow, ChainSnapshot
 
@@ -87,7 +88,9 @@ def iter_eod_snapshots(symbol: str, session_date: str,
     Emits nothing for a date with no traded rows, rather than an empty chain: a
     snapshot with no strikes is indistinguishable from a broken one downstream.
     """
-    conn = sqlite3.connect(src_db)
+    conn = open_existing(src_db)
+    if conn is None:
+        return
     try:
         rows = conn.execute("""
             SELECT expiry_dt, strike, option_type, close, volume, oi, chg_oi,
@@ -177,7 +180,9 @@ def _front_future(conn, symbol: str, session_date: str,
 
 def available_dates(symbol: str, src_db: str = NSE_EOD_DB) -> list[str]:
     """Trading dates the archive holds for a symbol, oldest first."""
-    conn = sqlite3.connect(src_db)
+    conn = open_existing(src_db)
+    if conn is None:
+        return []
     try:
         rows = conn.execute(
             "SELECT DISTINCT trad_dt FROM daily_option WHERE symbol = ? "

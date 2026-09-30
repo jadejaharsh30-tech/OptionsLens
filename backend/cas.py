@@ -171,7 +171,11 @@ def load_cas_history(symbol: str, db_path: Optional[str] = None) -> list[dict]:
     """
     from config import MARKET_DATA_DB
 
-    conn = sqlite3.connect(db_path or MARKET_DATA_DB)
+    from dbutil import open_existing
+
+    conn = open_existing(db_path or MARKET_DATA_DB)
+    if conn is None:
+        return []
     conn.row_factory = sqlite3.Row
     try:
         bars = conn.execute("""

@@ -158,7 +158,11 @@ def load_basis_history(symbol: str, src_db: Optional[str] = None,
     """
     from config import NSE_EOD_DB
 
-    conn = sqlite3.connect(src_db or NSE_EOD_DB)
+    from dbutil import open_existing
+
+    conn = open_existing(src_db or NSE_EOD_DB)
+    if conn is None:
+        return []
     try:
         rows = conn.execute("""
             SELECT trad_dt, expiry_dt, close, volume, underlying
