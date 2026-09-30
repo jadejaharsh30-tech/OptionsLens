@@ -173,9 +173,13 @@ What will and will not work here:
 ## Downloading history before July 2024 (run at home)
 
 Files before 8 July 2024 use an older format, with no underlying price and
-column spellings that vary by year. This code was written without access to
-those files (NSE blocks datacenter connections), so the run starts with a
-PROBE that shows how each year parses before anything is downloaded in bulk.
+column spellings that vary by year. The run starts with a PROBE that shows how
+each year parses before anything is downloaded in bulk. First probe
+(2026-09-30): every year 2002-2024 parsed; options exist from 2002 (NIFTY,
+INFY, RELIANCE), 2004 (HDFCBANK, ICICIBANK), 2005 (TCS) and 2006
+(BANKNIFTY); stock options are American (CA/PA, not priced) until 2011.
+NSE blocks datacenter connections, not every network: the probe worked from
+an office network as well as from home.
 All commands are for `cmd.exe`, from `backend` with the venv active.
 
 **1. Probe: about a minute, writes nothing.**

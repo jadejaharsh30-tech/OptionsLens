@@ -314,6 +314,25 @@ or is pinned to it by a test.
 
 Append one line per session. Keep it terse.
 
+- **2026-09-30 (22)** — FIRST LOOK AT REAL LEGACY FILES, via `--probe
+  2001-2024` from the user's OFFICE network: NSE is reachable from there, so
+  "home connection only" was too strong — it blocks datacenters, not every
+  office. Every year 2002-2024 parsed (one January file each); 2001 correctly
+  reports no options (index options began mid-2001). Measured facts:
+  NIFTY, INFY and RELIANCE options from 2002; HDFCBANK and ICICIBANK from
+  2004; TCS from 2005; BANKNIFTY from 2006. Stock options are CA/PA
+  (American) through the January 2010 file and CE/PE from January 2011, so
+  stock IV history — and `dispersion` — begins in 2011. No legacy year
+  publishes an underlying price; every year carries the front futures (3 per
+  symbol), so the spot estimate has its input throughout. Other instrument
+  codes seen and ignored: FUTINT/UNDINT (interest-rate futures, 2004-09),
+  FUTIVX (India VIX futures, 2015-18). The probe samples January only; the
+  column misspelling recorded for 2003/2005/2006 did not appear in those
+  January files, so if it exists it is mid-year — the full download logs any
+  such day as an error rather than an empty success.
+  Also added CI (item 55, partial): backend tests on Linux AND Windows, plus
+  a frontend build, on every push.
+
 - **2026-09-30 (21)** — Built the pre-2024 history download, for the user to run
   at home (NSE is unreachable from this environment, so no real legacy file was
   seen). Legacy columns read by alias; an unparseable year now fails LOUDLY
