@@ -282,7 +282,7 @@ def test_intraday_bars_are_scored_on_daily_horizons_because_the_signal_says_so()
     5-60 minute horizons that all fall after the session has closed.
     """
     from backtest.engine import run_backtest
-    from recorder.store import init_db, write_snapshot
+    from recorder.store import init_db, write_snapshots
 
     days, d = [], date(2026, 8, 3)
     while len(days) < 90:
@@ -294,12 +294,13 @@ def test_intraday_bars_are_scored_on_daily_horizons_because_the_signal_says_so()
         db = os.path.join(tmp, "m.db")
         init_db(db)
         spot = 24000.0
+        batch = []
         for i, day in enumerate(days):
             # Most auctions are small; every tenth prints +45 bps.
             gap = 0.0045 if i % 10 == 9 else ((i % 7) - 3) * 0.0002
-            for b in session(day, pre=spot, post=spot * math.exp(gap)):
-                write_snapshot(b, db)
+            batch.extend(session(day, pre=spot, post=spot * math.exp(gap)))
             spot *= 1.0 + ((i % 5) - 2) * 0.001
+        write_snapshots(batch, db)
 
         series = load_cas_history(SYM, db)
         run = run_backtest(SIGNAL_ID, SYM, db_path=db, persist_evaluations=False,

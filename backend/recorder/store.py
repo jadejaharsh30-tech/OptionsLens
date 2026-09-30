@@ -129,36 +129,55 @@ def write_snapshot(snapshot: ChainSnapshot, db_path: str = MARKET_DATA_DB) -> in
     INSERT OR IGNORE makes re-polling the same aligned timestamp idempotent,
     so a recorder restart mid-minute cannot create duplicates.
     """
+    return write_snapshots([snapshot], db_path)
+
+
+def write_snapshots(snapshots, db_path: str = MARKET_DATA_DB) -> int:
+    """
+    Persist many snapshots in ONE transaction. Returns rows written.
+
+    For bulk loads. One commit per snapshot is cheap on Linux and expensive on
+    Windows, where every commit is a disk flush that antivirus also inspects:
+    CI measured the same test suite at 17 seconds on Linux and 3.5 minutes on
+    Windows, almost all of it in per-row commits. Rebuilding thousands of
+    exchange sessions into eod_snapshots.db one commit at a time paid that
+    cost once per session.
+    """
+    total = 0
+    with _conn(db_path) as conn:
+        for snapshot in snapshots:
+            total += _insert_snapshot(conn, snapshot)
+    return total
+
+
+def _insert_snapshot(conn, snapshot: ChainSnapshot) -> int:
     if not snapshot.rows:
         return 0
-
-    with _conn(db_path) as conn:
-        conn.execute("""
-            INSERT OR IGNORE INTO chain_meta
-                (ts, session_date, session_phase, symbol,
-                 expiry_date, expiry_epoch, spot, futures, row_count,
-                 futures_expiry)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            snapshot.ts, snapshot.session_date, snapshot.session_phase.value,
-            snapshot.symbol, snapshot.expiry_date, snapshot.expiry_epoch,
-            snapshot.spot, snapshot.futures, len(snapshot.rows),
-            snapshot.futures_expiry,
-        ))
-
-        cur = conn.executemany("""
-            INSERT OR IGNORE INTO chain_rows
-                (ts, session_date, symbol, expiry_date, strike, option_type,
-                 oi, oi_change, oi_change_pct, prev_oi, ltp, bid, ask, volume)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, [
-            (snapshot.ts, snapshot.session_date, snapshot.symbol,
-             snapshot.expiry_date, r.strike, r.option_type,
-             r.oi, r.oi_change, r.oi_change_pct, r.prev_oi,
-             r.ltp, r.bid, r.ask, r.volume)
-            for r in snapshot.rows
-        ])
-        return cur.rowcount
+    conn.execute("""
+        INSERT OR IGNORE INTO chain_meta
+            (ts, session_date, session_phase, symbol,
+             expiry_date, expiry_epoch, spot, futures, row_count,
+             futures_expiry)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        snapshot.ts, snapshot.session_date, snapshot.session_phase.value,
+        snapshot.symbol, snapshot.expiry_date, snapshot.expiry_epoch,
+        snapshot.spot, snapshot.futures, len(snapshot.rows),
+        snapshot.futures_expiry,
+    ))
+    cur = conn.executemany("""
+        INSERT OR IGNORE INTO chain_rows
+            (ts, session_date, symbol, expiry_date, strike, option_type,
+             oi, oi_change, oi_change_pct, prev_oi, ltp, bid, ask, volume)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, [
+        (snapshot.ts, snapshot.session_date, snapshot.symbol,
+         snapshot.expiry_date, r.strike, r.option_type,
+         r.oi, r.oi_change, r.oi_change_pct, r.prev_oi,
+         r.ltp, r.bid, r.ask, r.volume)
+        for r in snapshot.rows
+    ])
+    return cur.rowcount
 
 
 def write_eod_close(session_date: str, symbol: str, close_price: float,

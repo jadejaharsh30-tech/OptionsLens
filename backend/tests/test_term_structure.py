@@ -524,17 +524,19 @@ def weekdays(n: int, start="2026-01-05") -> list[str]:
 
 def _eod_store(tmp: str, dates: list[str], skew_slope=lambda i: 0.6) -> str:
     """One EOD bar per session, priced from a smile that can vary by day."""
-    from recorder.store import init_db, write_snapshot
+    from recorder.store import init_db, write_snapshots
 
     db = os.path.join(tmp, "eod.db")
     init_db(db)
+    batch = []
     for i, d in enumerate(dates):
-        write_snapshot(ChainSnapshot(
+        batch.append(ChainSnapshot(
             ts=f"{d}T15:30:00+05:30", session_date=d,
             session_phase=SessionPhase.END_OF_DAY, symbol=SYM,
             expiry_date=_expiry_in(TENOR_DAYS, d), expiry_epoch=0,
             spot=SPOT * (1.0 + 0.001 * ((i % 7) - 3)),
-            rows=skewed_chain(skew_slope(i))), db)
+            rows=skewed_chain(skew_slope(i))))
+    write_snapshots(batch, db)
     return db
 
 

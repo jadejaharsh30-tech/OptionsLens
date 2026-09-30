@@ -44,6 +44,9 @@ from recorder.models import ChainRow, ChainSnapshot
 # current price, low enough to keep far-month ATM strikes on quiet days.
 DEFAULT_MIN_VOLUME = 25.0
 
+# Sessions per commit when materialising (see materialize).
+MATERIALIZE_BATCH = 250
+
 
 def _eod_timestamp(trad_dt: str) -> str:
     """The session's close instant, so bars sort and join like recorder rows."""
@@ -210,7 +213,7 @@ def materialize(symbol: str, dest_db: str,
     `nearest_expiry_only` keeps one chain per date, which is what a
     directional daily signal wants. Term-structure work needs all of them.
     """
-    from recorder.store import init_db, write_snapshot
+    from recorder.store import init_db, write_snapshots
 
     init_db(dest_db)
     dates = dates if dates is not None else available_dates(symbol, src_db)
@@ -219,6 +222,11 @@ def materialize(symbol: str, dest_db: str,
     written_snaps = 0
     skipped_dates = 0
 
+    # Committed in batches rather than per session: on Windows each commit is
+    # a flush plus an antivirus scan, and a first run rebuilds thousands of
+    # sessions. Batches, not one transaction, so an interrupted run keeps
+    # most of its work.
+    pending: list = []
     for d in sorted(dates):
         snaps = list(iter_eod_snapshots(symbol, d, src_db, min_volume))
         if not snaps:
@@ -226,9 +234,13 @@ def materialize(symbol: str, dest_db: str,
             continue
         if nearest_expiry_only:
             snaps = [min(snaps, key=lambda s: s.expiry_epoch)]
-        for s in snaps:
-            written_rows += write_snapshot(s, dest_db)
-            written_snaps += 1
+        pending.extend(snaps)
+        written_snaps += len(snaps)
+        if len(pending) >= MATERIALIZE_BATCH:
+            written_rows += write_snapshots(pending, dest_db)
+            pending = []
+    if pending:
+        written_rows += write_snapshots(pending, dest_db)
 
     return {
         "symbol": symbol.upper(),

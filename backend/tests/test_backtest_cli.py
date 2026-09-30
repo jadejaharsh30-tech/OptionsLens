@@ -39,7 +39,7 @@ def build_world(tmp: str, days: list[dt.date]) -> tuple[str, str]:
     """An archive with a priceable front chain per day, and an app store with
     per-expiry ATM IV either side of 30 days plus exchange closes."""
     from bhavcopy.download import SCHEMA
-    from snapshot_store import init_db, write_atm_iv, write_spot_price
+    from snapshot_store import init_db, write_atm_iv_many, write_spot_many
 
     archive = os.path.join(tmp, "nse.db")
     app = os.path.join(tmp, "app.db")
@@ -48,6 +48,7 @@ def build_world(tmp: str, days: list[dt.date]) -> tuple[str, str]:
     init_db(app)
 
     spot = 24000.0
+    iv_rows, spot_rows = [], []            # batched: one commit, not thousands
     for i, d in enumerate(days):
         # A slow IV cycle so the VRP spread visits both tails.
         iv = 0.14 + 0.05 * math.sin(i / 9.0)
@@ -63,10 +64,12 @@ def build_world(tmp: str, days: list[dt.date]) -> tuple[str, str]:
                 """, (d.isoformat(), SYM, expiry.isoformat(), k, opt,
                       round(px, 2), spot))
         for offset in (20, 40):
-            write_atm_iv(app, d.isoformat(), SYM,
-                         (d + dt.timedelta(days=offset)).strftime("%d-%m-%Y"), iv)
-        write_spot_price(app, d.isoformat(), SYM, spot)
+            iv_rows.append((d.isoformat(), SYM,
+                            (d + dt.timedelta(days=offset)).strftime("%d-%m-%Y"), iv))
+        spot_rows.append((d.isoformat(), SYM, spot))
         spot *= 1.0 + 0.004 * math.sin(i * 1.7)
+    write_atm_iv_many(app, iv_rows, "bhavcopy")
+    write_spot_many(app, spot_rows)
     conn.commit()
     conn.close()
     return archive, app

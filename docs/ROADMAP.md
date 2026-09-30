@@ -239,7 +239,12 @@ differentiator. This is another reason the recorder is urgent.
 ### Phase 7 — Platform hardening
 
 - [x] 54. Router tests — 30 covering auth/validate, recorder, backtest, trades, notify, alert-engine, chain, oi, expiries, with the broker faked via `dependency_overrides` + monkeypatch. Includes a regression for the auth bug that rejected every valid token. Found that `start_scheduler` was not safe to call twice; now guarded
-- [ ] 55. CI (GitHub Actions running pytest), Fyers response caching, recorder supervision/auto-restart, Docker persistence
+- [~] 55. CI (GitHub Actions running pytest), Fyers response caching, recorder supervision/auto-restart, Docker persistence.
+  **CI DONE 2026-09-30**: backend tests on Linux AND Windows plus a frontend
+  build, every push. Its first run found a real bug (readers creating the
+  database they were asked to read; hidden locally by running as root) and a
+  ~12x Windows slowdown from per-row commits, fixed by batching. Caching,
+  recorder supervision and Docker persistence remain
 
 ### Phase 8 — Education & explainability layer
 

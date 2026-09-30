@@ -47,7 +47,9 @@ python -m backtest.cli run --signal vrp --symbol NIFTY --to 2024-07-05   # out-o
 python -m bhavcopy.download --probe 2001-2024 --stocks --symbols NIFTY,BANKNIFTY
 ```
 
-532 tests, none needing a Fyers token or network: the engines, `chain_pricing`, `market_hours`, `recorder`, `snapshot_store`, `eod_vol`, `lot_sizes`, `bhavcopy` (importer end to end on a synthetic Black-76 archive), `signals`/`backtest`, `term_structure`/`skew`, `futures`, `cas`, `dispersion`, signal correlation, `trading`, `notify`, `alert_engine/percentile_threshold`. Routers are covered by `test_routers.py` (fake broker via monkeypatch + `dependency_overrides`, module-scoped client because the lifespan starts a scheduler); `fyers_client` itself is still untested.
+533 tests, none needing a Fyers token or network: the engines, `chain_pricing`, `market_hours`, `recorder`, `snapshot_store`, `eod_vol`, `lot_sizes`, `bhavcopy` (importer end to end on a synthetic Black-76 archive), `signals`/`backtest`, `term_structure`/`skew`, `futures`, `cas`, `dispersion`, signal correlation, `trading`, `notify`, `alert_engine/percentile_threshold`. Routers are covered by `test_routers.py` (fake broker via monkeypatch + `dependency_overrides`, module-scoped client because the lifespan starts a scheduler); `fyers_client` itself is still untested.
+
+**CI** (`.github/workflows/ci.yml`) runs the backend suite on **Linux and Windows** plus a frontend build on every push. Windows matters: two bugs so far existed only there, and a third (a reader creating the missing database it was asked to read) only showed for a non-root user. **Bulk writes go through one transaction** (`recorder.store.write_snapshots`, `write_*_many`): a commit per row is cheap on Linux and a disk flush plus antivirus scan on Windows — CI measured 17 s vs 3.5 min for the same suite.
 
 ### Frontend (run from `frontend/`)
 

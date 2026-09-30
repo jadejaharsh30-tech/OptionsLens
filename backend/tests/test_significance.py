@@ -166,7 +166,7 @@ def test_daily_runs_report_the_shift_test_and_intraday_runs_warn():
     from backtest.engine import run_backtest
     from market_hours import SessionPhase
     from recorder.models import ChainRow, ChainSnapshot
-    from recorder.store import init_db, write_snapshot
+    from recorder.store import init_db, write_snapshots
     from signals.base import Direction, Signal, SignalResult
     from signals.registry import _REGISTRY, register_signal
 
@@ -194,13 +194,15 @@ def test_daily_runs_report_the_shift_test_and_intraday_runs_warn():
         db = os.path.join(tmp, "eod.db")
         init_db(db)
         spot = 24000.0
+        batch = []
         for i, day in enumerate(days):
             spot *= 1 + 0.006 * math.sin(i * 1.3)
-            write_snapshot(ChainSnapshot(
+            batch.append(ChainSnapshot(
                 ts=f"{day}T15:30:00+05:30", session_date=day,
                 session_phase=SessionPhase.END_OF_DAY, symbol="NIFTY",
                 expiry_date="30-12-2026", expiry_epoch=1, spot=spot,
-                rows=(ChainRow(strike=24000.0, option_type="CE", ltp=100.0),)), db)
+                rows=(ChainRow(strike=24000.0, option_type="CE", ltp=100.0),)))
+        write_snapshots(batch, db)
         run = run_backtest("sig_probe_runs", "NIFTY", db_path=db,
                            persist_evaluations=False).to_dict()
 

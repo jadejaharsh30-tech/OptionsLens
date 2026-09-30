@@ -217,7 +217,7 @@ def _vol_db_and_series(n=160):
     import random
     from market_hours import SessionPhase
     from recorder.models import ChainRow, ChainSnapshot
-    from recorder.store import init_db, write_snapshot
+    from recorder.store import init_db, write_snapshots
     from signals.store import init_db as init_sig
 
     fd, db = tempfile.mkstemp(suffix=".db")
@@ -229,6 +229,7 @@ def _vol_db_and_series(n=160):
     ds = sessions(n)
     spot, level = 24000.0, 0.16
     iv_series = []
+    batch = []
     for i, d in enumerate(ds):
         level += (0.16 - level) * 0.05 + rng.gauss(0, 0.005)
         level = max(0.08, min(0.35, level))
@@ -243,11 +244,12 @@ def _vol_db_and_series(n=160):
                 rows.append(ChainRow(strike=strike, option_type=opt,
                                      oi=1000.0 + skew * 20, ltp=120.0,
                                      volume=600.0))
-        write_snapshot(ChainSnapshot(
+        batch.append(ChainSnapshot(
             ts=f"{d}T15:30:00+05:30", session_date=d,
             session_phase=SessionPhase.END_OF_DAY, symbol=SYM,
             expiry_date="31-12-2026", expiry_epoch=1798700000,
-            spot=spot, rows=tuple(rows)), db)
+            spot=spot, rows=tuple(rows)))
+    write_snapshots(batch, db)
     return db, iv_series
 
 
