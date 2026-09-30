@@ -146,3 +146,44 @@ def test_unknown_signal_and_empty_archive_fail_with_a_message(capsys):
         assert main(base + ["run", "--signal", "not_a_signal"]) == 2
         assert main(base + ["run", "--signal", "vrp"]) == 1
     assert "BHAVCOPY.md" in capsys.readouterr().err
+
+
+# ── Long history: the out-of-sample run on 2008-2024 ──────────────────────────
+
+def test_sessions_older_than_two_years_still_get_their_history(capsys):
+    """
+    The loaders kept only the most recent 504 dates. On an 18-year archive
+    every session before the last two years found no reading and skipped, so
+    an out-of-sample run on the old years would have tested nothing.
+    """
+    from backtest.cli import main
+
+    with tempfile.TemporaryDirectory() as tmp:
+        archive, app = build_world(tmp, weekdays(760))
+        days = weekdays(760)
+        cutoff = days[199].isoformat()                 # 560 dates before the end
+        base = ["--db", os.path.join(tmp, "s.db"), "--app-db", app,
+                "--archive", archive]
+        assert main(base + ["run", "--signal", "vrp", "--to", cutoff]) == 0
+    out = capsys.readouterr().out
+    assert f"Replaying 200 sessions, {days[0].isoformat()} to {cutoff}." in out
+    assert "vrp.v1 on NIFTY — 200 sessions" in out
+    line = next(l for l in out.splitlines() if l.startswith("vrp.v1 on NIFTY"))
+    fired = int(line.split("sessions, ")[1].split(" fired")[0])
+    assert fired > 0
+
+
+def test_ranking_uses_the_stated_lookback_not_all_prior_history():
+    """
+    Loading the full archive must not silently turn a two-year rank into an
+    eighteen-year one: that would be a different signal.
+    """
+    from vrp import DEFAULT_LOOKBACK, recent_observations
+
+    series = [{"date": (dt.date(2008, 1, 1) + dt.timedelta(days=i)).isoformat(),
+               "vrp": float(i)} for i in range(2000)]
+    got = recent_observations(series, "2013-06-01")
+    assert len(got) == DEFAULT_LOOKBACK
+    assert got[-1]["date"] < "2013-06-01"
+    assert len(recent_observations(series, "2013-06-01", lookback=60)) == 60
+    assert len(recent_observations(series, "2008-01-05")) == 4   # fewer exist

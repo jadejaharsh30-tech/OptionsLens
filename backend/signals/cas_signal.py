@@ -36,7 +36,7 @@ from signals.base import Direction, Signal, SignalContext, SignalResult
 from signals.registry import register_signal
 from market_hours import SessionPhase
 from cas import MEASURES, MIN_OBSERVATIONS, auction_reading, dislocation_percentile
-from vrp import observations_before
+from vrp import DEFAULT_LOOKBACK, recent_observations
 
 SIGNAL_ID = "cas_dislocation"
 VERSION = 1
@@ -68,6 +68,8 @@ def _is_first_post_auction_bar(ctx: SignalContext) -> bool:
         "high_percentile": 90.0,
         "low_percentile":  10.0,
         "min_observations": MIN_OBSERVATIONS,
+        # Prior readings ranked against (~2 years); see vrp.DEFAULT_LOOKBACK.
+        "lookback": DEFAULT_LOOKBACK,
         # An extreme percentile in a quiet stretch can be a two-basis-point gap,
         # well inside the bid-ask of the underlying.
         "min_abs_bps": 5.0,
@@ -114,7 +116,8 @@ def cas_dislocation(ctx: SignalContext) -> SignalResult:
             f"{measure} unavailable today — futures missing on one side of the "
             f"auction, or the front contract rolled at 15:30", features)
 
-    history = observations_before(series, snap.session_date)
+    history = recent_observations(series, snap.session_date,
+                                  int(ctx.param("lookback", DEFAULT_LOOKBACK)))
     min_obs = int(ctx.param("min_observations", MIN_OBSERVATIONS))
     pct = dislocation_percentile(history, current, measure, min_obs)
     features["history_size"] = sum(1 for r in history if r.get(measure) is not None)

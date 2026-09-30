@@ -314,6 +314,20 @@ or is pinned to it by a test.
 
 Append one line per session. Keep it terse.
 
+- **2026-09-30 (21)** — Built the pre-2024 history download, for the user to run
+  at home (NSE is unreachable from this environment, so no real legacy file was
+  seen). Legacy columns read by alias; an unparseable year now fails LOUDLY
+  instead of logging an empty success; `--probe` describes one file per year
+  without writing; CA/PA American stock options stored but not priced; INFY's
+  old symbol INFOSYSTCH mapped (believed, probe will confirm). Spot for legacy
+  dates estimated from the front future (`bhavcopy/spot.py`, tagged
+  `futures_estimate`, shared by importer and snapshots). **Found and fixed
+  before it cost a home run:** every history loader kept only the last 504
+  dates, so all pre-2024 sessions would have skipped. The data window is now the
+  whole archive and the RANKING window (504) is an explicit `lookback` in each
+  signal, so 2024-26 results are unchanged. `backtest.cli --from/--to` replays
+  the out-of-sample years only. Runbook: docs/BHAVCOPY.md. 532 tests pass.
+
 - **2026-09-29 (20)** — RE-RUN UNDER THE CIRCULAR-SHIFT TEST, NIFTY, 549
   sessions, unchanged default parameters. **All three NO_EDGE at every horizon
   and in both directions.** 20d_vol: `vrp` edge +0.89, p 0.194 (short-vol

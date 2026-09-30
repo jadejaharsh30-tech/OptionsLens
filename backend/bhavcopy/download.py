@@ -33,11 +33,22 @@ that is not published yet is retried on the next run, never marked a holiday.
 The database path defaults to $NSE_EOD_DB, falling back to nse_options_eod.db
 in the working directory. Load the result into the app with bhavcopy.importer.
 
-Pre-2024-07-08 (legacy format) caveats, not yet handled:
-  - Some years (2003, 2005 and 2006 were observed) spell the option-type column
-    differently. extract() reads OPTION_TYP only, so those years would silently
-    keep zero option rows.
-  - Legacy files publish no underlying price; spot must come from futures.
+Pre-2024-07-08 (legacy format):
+  - Column names are matched by ALIAS (`LEGACY_ALIASES`), not exact spelling.
+    Some years (2003, 2005 and 2006 were observed) spell the option-type column
+    differently; the old exact-name lookup kept zero option rows for them and
+    logged the day as a success.
+  - A file that carries option rows for the requested symbols but yields none
+    after parsing is now logged as an ERROR naming the headers it found, so it
+    is retried after a fix instead of being recorded as done.
+  - Stock options were American-style until 2011 and are published as CA/PA.
+    They are stored as published; the importer prices only European CE/PE,
+    because a Black-76 IV on an American option is the wrong number.
+  - Legacy files publish no underlying price. The importer estimates it from
+    the front-month future (bhavcopy/spot.py) and tags it as an estimate.
+  - Before a long legacy run, use --probe: one file per year, parsed and
+    described, nothing written. It is the only way to see a format this code
+    was not written for before spending hours downloading it.
 
 Re-running a range is safe and cheap: completed dates are skipped, and rows are
 written with INSERT OR IGNORE, so a partial run resumes without duplicating.
@@ -95,6 +106,46 @@ CODES = {
 }
 
 DEFAULT_SYMBOLS = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]
+
+# Option types as published. CA/PA are the American-style stock options NSE
+# listed until 2011: kept raw, never priced as European (see importer).
+OPTION_TYPES = {"CE", "PE", "CA", "PA"}
+
+# Legacy-era column aliases, matched after normalising a header to upper case
+# with everything but letters and digits removed ("OPTION_TYP" -> "OPTIONTYP").
+# Only OPTION_TYP was confirmed on real files by the session that wrote this
+# downloader; the rest are defensive. A file whose required columns cannot all
+# be resolved is logged as an error naming its headers, never parsed partially.
+LEGACY_ALIASES = {
+    "instrument":  ("INSTRUMENT", "INSTRUMENTTYPE", "INSTTYPE"),
+    "symbol":      ("SYMBOL", "UNDERLYING", "SYMBOLNAME"),
+    "expiry_dt":   ("EXPIRYDT", "EXPIRYDATE", "EXPIRY", "EXPDATE"),
+    "strike":      ("STRIKEPR", "STRIKEPRICE", "STRIKE", "STRKPRICE"),
+    "option_type": ("OPTIONTYP", "OPTIONTYPE", "OPTTYPE", "OPTTYP", "OPTIONTY",
+                    "OPTIONTYPES", "CALLPUT"),
+    "open":        ("OPEN", "OPENPRICE"),
+    "high":        ("HIGH", "HIGHPRICE"),
+    "low":         ("LOW", "LOWPRICE"),
+    "close":       ("CLOSE", "CLOSEPRICE", "CLOSINGPRICE"),
+    "settle":      ("SETTLEPR", "SETTLEPRICE", "SETTLEMENTPRICE"),
+    "volume":      ("CONTRACTS", "NOOFCONTRACTS", "NUMCONTRACTS", "TOTALCONTRACTS"),
+    "turnover":    ("VALINLAKH", "VALUEINLAKH", "VALINLAKHS", "TURNOVER"),
+    "oi":          ("OPENINT", "OPENINTEREST", "OI"),
+    "chg_oi":      ("CHGINOI", "CHANGEINOI", "CHGOI"),
+    "timestamp":   ("TIMESTAMP", "DATE", "TRADEDATE", "TRADINGDATE"),
+}
+
+# Without these a row cannot be stored meaningfully. The timestamp is not
+# among them: every file is for one known date, so a missing column falls back
+# to the date being downloaded.
+LEGACY_REQUIRED = ("instrument", "symbol", "expiry_dt", "strike", "option_type",
+                   "close")
+
+# NSE trading-symbol renames, old -> current. Applied only to requested
+# symbols, so history files under the name the rest of the app uses. INFY
+# traded as INFOSYSTCH until 2011 (believed; --probe shows which name a year's
+# file actually carries).
+SYMBOL_RENAMES = {"INFOSYSTCH": "INFY"}
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS daily_option (
@@ -251,7 +302,7 @@ def iso_date(value: str, era: str) -> str | None:
             except ValueError:
                 continue
         return None
-    for fmt in ("%d-%b-%Y", "%Y-%m-%d"):
+    for fmt in ("%d-%b-%Y", "%Y-%m-%d", "%d-%b-%y", "%d/%m/%Y", "%d-%m-%Y"):
         try:
             return datetime.strptime(text.title(), fmt).date().isoformat()
         except ValueError:
@@ -286,29 +337,70 @@ def extract(row: dict[str, str], era: str) -> dict:
             "instrument":     row.get("FinInstrmTp", "").upper(),
             "era":            era,
         }
+    return extract_legacy(row, legacy_columns(list(row.keys()))[0])
+
+
+def _norm(header: str) -> str:
+    return "".join(ch for ch in (header or "").upper() if ch.isalnum())
+
+
+def legacy_columns(headers: list[str]) -> tuple[dict[str, str], list[str]]:
+    """
+    Resolve canonical field -> actual header for one legacy file.
+
+    Returns (mapping, missing_required). An option-type header that matches no
+    alias but reads like one (starts OPT, contains TYP) is accepted, because
+    that column is the one that has already been seen misspelt.
+    """
+    by_norm = {_norm(h): h for h in headers if h}
+    found: dict[str, str] = {}
+    for field, aliases in LEGACY_ALIASES.items():
+        for a in aliases:
+            if a in by_norm:
+                found[field] = by_norm[a]
+                break
+    if "option_type" not in found:
+        for n, h in by_norm.items():
+            if n.startswith("OPT") and "TYP" in n:
+                found["option_type"] = h
+                break
+    missing = [f for f in LEGACY_REQUIRED if f not in found]
+    return found, missing
+
+
+def extract_legacy(row: dict[str, str], cols: dict[str, str],
+                   file_day: date | None = None) -> dict:
+    """One legacy row through the resolved column map."""
+    def get(field: str) -> str:
+        h = cols.get(field)
+        return row.get(h, "") if h else ""
+
+    trad = iso_date(get("timestamp"), "legacy")
+    if trad is None and file_day is not None:
+        trad = file_day.isoformat()
     return {
-        "trad_dt":        iso_date(row.get("TIMESTAMP", ""), era),
-        "symbol":         row.get("SYMBOL", "").upper(),
-        "expiry_dt":      iso_date(row.get("EXPIRY_DT", ""), era),
+        "trad_dt":        trad,
+        "symbol":         get("symbol").upper(),
+        "expiry_dt":      iso_date(get("expiry_dt"), "legacy"),
         "actl_expiry_dt": None,
-        "strike":         num(row.get("STRIKE_PR", "")),
-        "option_type":    row.get("OPTION_TYP", "").upper(),
-        "open":           num(row.get("OPEN", "")),
-        "high":           num(row.get("HIGH", "")),
-        "low":            num(row.get("LOW", "")),
-        "close":          num(row.get("CLOSE", "")),
+        "strike":         num(get("strike")),
+        "option_type":    get("option_type").upper(),
+        "open":           num(get("open")),
+        "high":           num(get("high")),
+        "low":            num(get("low")),
+        "close":          num(get("close")),
         "last":           None,          # not published in this era
         "prev_close":     None,          # not published in this era
-        "settle":         num(row.get("SETTLE_PR", "")),
+        "settle":         num(get("settle")),
         "underlying":     None,          # not published in this era
-        "oi":             num(row.get("OPEN_INT", "")),
-        "chg_oi":         num(row.get("CHG_IN_OI", "")),
-        "volume":         num(row.get("CONTRACTS", "")),
+        "oi":             num(get("oi")),
+        "chg_oi":         num(get("chg_oi")),
+        "volume":         num(get("volume")),
         "num_trades":     None,
-        "turnover_raw":   num(row.get("VAL_INLAKH", "")),   # lakhs, not rupees
+        "turnover_raw":   num(get("turnover")),   # lakhs, not rupees
         "lot_size":       None,
-        "instrument":     row.get("INSTRUMENT", "").upper(),
-        "era":            era,
+        "instrument":     get("instrument").upper(),
+        "era":            "legacy",
     }
 
 
@@ -391,26 +483,78 @@ def ingest_day(conn: sqlite3.Connection, day: date, symbols: set[str] | None,
     opt_codes = {codes["idx_opt"]} | ({codes["stk_opt"]} if include_stocks else set())
     fut_codes = {codes["idx_fut"]} | ({codes["stk_fut"]} if include_stocks else set())
 
-    options: list[dict] = []
-    futures: list[dict] = []
-    for row in raw:
-        rec = extract(row, era)
-        if symbols is not None and rec["symbol"] not in symbols:
-            continue
-        if not rec["trad_dt"] or not rec["expiry_dt"]:
-            continue
-        if rec["instrument"] in opt_codes:
-            if rec["strike"] is None or rec["option_type"] not in {"CE", "PE"}:
-                continue
-            options.append(rec)
-        elif rec["instrument"] in fut_codes:
-            futures.append(rec)
+    parsed = parse_rows(raw, era, day, symbols, opt_codes, fut_codes)
+    if parsed.problem:
+        log(conn, day, era, url, "error", len(raw), note=parsed.problem)
+        conn.commit()
+        return "error", 0, 0
+    options, futures = parsed.options, parsed.futures
 
     n_opt = insert(conn, "daily_option", OPTION_COLS, options)
     n_fut = insert(conn, "daily_future", FUTURE_COLS, futures)
     log(conn, day, era, url, "ok", len(raw), n_opt, n_fut)
     conn.commit()
     return "ok", n_opt, n_fut
+
+
+class Parsed:
+    """What one file yielded, and why it cannot be trusted if it cannot."""
+    def __init__(self):
+        self.options: list[dict] = []
+        self.futures: list[dict] = []
+        self.option_rows_seen = 0          # rows for requested symbols coded as options
+        self.option_types: dict[str, int] = {}
+        self.symbols_seen: set[str] = set()
+        self.problem: str | None = None
+
+
+def parse_rows(raw: list[dict[str, str]], era: str, day: date,
+               symbols: set[str] | None, opt_codes: set[str],
+               fut_codes: set[str]) -> Parsed:
+    """
+    Parse one file's rows, refusing to report success on a silent zero.
+
+    The failure this guards against is the one the exact-name lookup had: a
+    year whose option-type column is spelt differently parses "fine", keeps no
+    option rows, and is logged as done — so it is never retried and the gap is
+    invisible until someone wonders why 2005 has no IV.
+    """
+    out = Parsed()
+    headers = list(raw[0].keys()) if raw else []
+    cols: dict[str, str] = {}
+    if era == "legacy":
+        cols, missing = legacy_columns(headers)
+        if missing:
+            out.problem = (f"legacy columns not recognised: missing {missing}; "
+                           f"headers were {[h for h in headers if h]}")
+            return out
+
+    for row in raw:
+        rec = (extract_legacy(row, cols, day) if era == "legacy"
+               else extract(row, era))
+        rec["symbol"] = SYMBOL_RENAMES.get(rec["symbol"], rec["symbol"])
+        if symbols is not None and rec["symbol"] not in symbols:
+            continue
+        out.symbols_seen.add(rec["symbol"])
+        if rec["instrument"] in opt_codes:
+            out.option_rows_seen += 1
+            out.option_types[rec["option_type"]] = \
+                out.option_types.get(rec["option_type"], 0) + 1
+        if not rec["trad_dt"] or not rec["expiry_dt"]:
+            continue
+        if rec["instrument"] in opt_codes:
+            if rec["strike"] is None or rec["option_type"] not in OPTION_TYPES:
+                continue
+            out.options.append(rec)
+        elif rec["instrument"] in fut_codes:
+            out.futures.append(rec)
+
+    if out.option_rows_seen and not out.options:
+        out.problem = (f"{out.option_rows_seen} option rows for the requested "
+                       f"symbols but none parsed; option-type values "
+                       f"{dict(sorted(out.option_types.items())[:6])}, "
+                       f"headers {[h for h in headers if h][:20]}")
+    return out
 
 
 def run(conn: sqlite3.Connection, start: date, end: date, symbols: set[str] | None,
@@ -461,6 +605,123 @@ def run(conn: sqlite3.Connection, start: date, end: date, symbols: set[str] | No
     print(f"errors          {stats['error']:,}")
     print(f"option rows     {total_opt:,}")
     print(f"future rows     {total_fut:,}")
+
+
+# ── probe ────────────────────────────────────────────────────────────────────
+
+def probe_year(year: int, symbols: set[str] | None, include_stocks: bool,
+               fetcher=None, pause: float = 0.8) -> dict:
+    """
+    Fetch ONE file from `year`, parse it, and describe it. Writes nothing.
+
+    Tries successive weekdays from 10 January (clear of New Year holidays)
+    until a file exists. The description is what a person needs to judge
+    whether this code reads that year correctly: the headers, which fields
+    resolved, the instrument codes and option-type values present, and which
+    requested symbols appear at all.
+    """
+    fetcher = fetcher or fetch
+    day = date(year, 1, 10)
+    for _ in range(12):
+        if day.weekday() < 5:
+            payload = fetcher(url_for(day))
+            if payload is not None:
+                break
+            time.sleep(pause)
+        day += timedelta(days=1)
+    else:
+        return {"year": year, "status": "NO_FILE", "note": "no file found in 12 days"}
+
+    era = era_for(day)
+    codes = CODES[era]
+    try:
+        raw = rows_from_zip(payload)
+    except (zipfile.BadZipFile, IndexError) as exc:
+        return {"year": year, "day": day.isoformat(), "status": "UNREADABLE",
+                "note": str(exc)}
+
+    headers = [h for h in (raw[0].keys() if raw else []) if h]
+    instruments: dict[str, int] = {}
+    for row in raw:
+        code = (row.get("INSTRUMENT") or row.get("FinInstrmTp") or "").upper()
+        if not code:
+            for k, v in row.items():
+                if _norm(k) in LEGACY_ALIASES["instrument"]:
+                    code = (v or "").upper()
+                    break
+        instruments[code] = instruments.get(code, 0) + 1
+
+    opt_codes = {codes["idx_opt"]} | ({codes["stk_opt"]} if include_stocks else set())
+    fut_codes = {codes["idx_fut"]} | ({codes["stk_fut"]} if include_stocks else set())
+    parsed = parse_rows(raw, era, day, symbols, opt_codes, fut_codes)
+    resolved, missing = legacy_columns(headers) if era == "legacy" else ({}, [])
+
+    kept_by_symbol: dict[str, int] = {}
+    for r in parsed.options:
+        kept_by_symbol[r["symbol"]] = kept_by_symbol.get(r["symbol"], 0) + 1
+    absent = sorted((symbols or set()) - parsed.symbols_seen)
+    has_underlying = any(r.get("underlying") for r in parsed.options[:50])
+
+    status = "OK"
+    if parsed.problem or missing:
+        status = "PROBLEM"
+    elif not parsed.options:
+        status = "NO_OPTIONS"
+    return {
+        "year": year, "day": day.isoformat(), "era": era, "status": status,
+        "rows": len(raw), "headers": headers,
+        "resolved": resolved, "missing": missing,
+        "instruments": dict(sorted(instruments.items(), key=lambda kv: -kv[1])[:8]),
+        "option_types": parsed.option_types,
+        "options_kept": len(parsed.options), "futures_kept": len(parsed.futures),
+        "kept_by_symbol": kept_by_symbol, "absent_symbols": absent,
+        "underlying_published": has_underlying,
+        "note": parsed.problem or "",
+    }
+
+
+def print_probe(info: dict) -> None:
+    y = info["year"]
+    if info["status"] in ("NO_FILE", "UNREADABLE"):
+        print(f"{y}  {info['status']}  {info.get('note', '')}")
+        return
+    print(f"{y}  {info['status']:<10} file {info['day']} ({info['era']}), "
+          f"{info['rows']:,} rows, options kept {info['options_kept']:,}, "
+          f"futures kept {info['futures_kept']:,}")
+    if info["kept_by_symbol"]:
+        print(f"      options by symbol: {info['kept_by_symbol']}")
+    if info["absent_symbols"]:
+        print(f"      requested but absent: {info['absent_symbols']}")
+    print(f"      option types: {info['option_types'] or '-'}   "
+          f"instruments: {info['instruments']}")
+    print(f"      underlying price published: "
+          f"{'yes' if info['underlying_published'] else 'no (spot will be estimated from futures)'}")
+    if info["status"] != "OK" or info["missing"]:
+        print(f"      headers: {info['headers']}")
+        if info["missing"]:
+            print(f"      MISSING required columns: {info['missing']}")
+        if info["note"]:
+            print(f"      {info['note']}")
+
+
+def probe(years: range, symbols: set[str] | None, include_stocks: bool,
+          pause: float) -> int:
+    print("Probe: one file per year, parsed and described. Nothing is written.\n")
+    problems = 0
+    for y in years:
+        try:
+            info = probe_year(y, symbols, include_stocks, pause=pause)
+        except Exception as exc:                       # noqa: BLE001
+            info = {"year": y, "status": "UNREADABLE",
+                    "note": f"{type(exc).__name__}: {exc} — if every year says "
+                            f"this, NSE is refusing the connection (home "
+                            f"network, not VPN or office, is usually needed)"}
+        print_probe(info)
+        problems += info["status"] in ("PROBLEM", "UNREADABLE")
+        time.sleep(pause)
+    print(f"\n{problems} year(s) need attention." if problems else
+          "\nEvery year parsed. Safe to run the full download.")
+    return 1 if problems else 0
 
 
 # ── report ───────────────────────────────────────────────────────────────────
@@ -562,7 +823,22 @@ def main() -> int:
                          "the symbol set, since the resume check is by date")
     ap.add_argument("--report", action="store_true",
                     help="summarise the database and exit")
+    ap.add_argument("--probe", metavar="YEAR-YEAR",
+                    help="fetch one file per year in the range (e.g. 2001-2024), "
+                         "describe how it parses, write nothing")
     args = ap.parse_args()
+
+    if args.probe:
+        try:
+            parts = [int(x) for x in args.probe.split("-")]
+            a, b = (parts[0], parts[-1]) if len(parts) in (1, 2) else (None, None)
+            if a is None:
+                raise ValueError
+        except ValueError:
+            ap.error("--probe expects YEAR or YEAR-YEAR, e.g. 2010 or 2001-2024")
+        symbols = (None if args.symbols.strip().upper() == "ALL"
+                   else {s.strip().upper() for s in args.symbols.split(",") if s.strip()})
+        return probe(range(a, b + 1), symbols, args.stocks, args.pause)
 
     conn = connect(args.db)
     try:

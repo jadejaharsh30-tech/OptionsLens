@@ -53,7 +53,7 @@ from term_structure import MIN_OBSERVATIONS, slope_percentile
 # The one look-ahead guard, deliberately shared rather than re-derived: `<`
 # versus `<=` is a one-character error that leaks today's reading into its own
 # percentile and is invisible in the output.
-from vrp import observations_before
+from vrp import DEFAULT_LOOKBACK, recent_observations
 
 SIGNAL_ID = "term_structure"
 VERSION = 1
@@ -79,6 +79,8 @@ def _todays_row(series: list[dict], session_date: str) -> Optional[dict]:
         "steep_percentile":    80.0,
         "inverted_percentile": 20.0,
         "min_observations":    MIN_OBSERVATIONS,
+        # Prior readings ranked against (~2 years); see vrp.DEFAULT_LOOKBACK.
+        "lookback": DEFAULT_LOOKBACK,
         # Percentile alone is not enough in either tail.
         #
         # Written on the assumption that an index curve is in contango almost
@@ -122,7 +124,8 @@ def term_structure_signal(ctx: SignalContext) -> SignalResult:
             f"no paired near/far constant-maturity IV for {session_date} — the "
             f"far leg needs a traded expiry beyond the far tenor")
 
-    history = observations_before(series, session_date)
+    history = recent_observations(series, session_date,
+                                  int(ctx.param("lookback", DEFAULT_LOOKBACK)))
     min_obs = int(ctx.param("min_observations", MIN_OBSERVATIONS))
 
     current = today["slope"]

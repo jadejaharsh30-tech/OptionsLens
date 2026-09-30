@@ -18,6 +18,14 @@ import config
 logger = logging.getLogger(__name__)
 
 
+# Load every date the stores hold. The loaders' own default (504 dates) was
+# the RANKING window leaking into the DATA window: with 2008-2024 imported,
+# every session before the last two years would have found no reading and
+# skipped. The ranking window is now explicit in each signal (`lookback`), so
+# the data can be complete without changing what a signal compares against.
+ALL_HISTORY_DAYS = 100_000
+
+
 @dataclass(frozen=True)
 class _Sources:
     app_db: str
@@ -73,7 +81,7 @@ def _add_vrp_extras(symbol: str, extras: dict, notes: list[str],
     from vrp import load_vrp_history, summarise
 
     try:
-        series = load_vrp_history(src.app_db, symbol)
+        series = load_vrp_history(src.app_db, symbol, days=ALL_HISTORY_DAYS)
     except Exception as e:                       # noqa: BLE001
         logger.warning(f"VRP history unavailable for {symbol}: {e!r}")
         notes.append(f"VRP history could not be loaded: {e}")
@@ -107,8 +115,8 @@ def _add_term_structure_extras(symbol: str, extras: dict, notes: list[str],
     from term_structure import coverage, load_term_structure_history, summarise
 
     try:
-        series = load_term_structure_history(src.app_db, symbol)
-        cov = coverage(src.app_db, symbol)
+        series = load_term_structure_history(src.app_db, symbol, days=ALL_HISTORY_DAYS)
+        cov = coverage(src.app_db, symbol, days=ALL_HISTORY_DAYS)
     except Exception as e:                       # noqa: BLE001
         logger.warning(f"Term structure unavailable for {symbol}: {e!r}")
         notes.append(f"Term-structure history could not be loaded: {e}")
@@ -211,7 +219,7 @@ def _add_dispersion_extras(symbol: str, extras: dict, notes: list[str],
     from dispersion import load_dispersion_history, summarise
 
     try:
-        series, info = load_dispersion_history(src.app_db, symbol)
+        series, info = load_dispersion_history(src.app_db, symbol, days=ALL_HISTORY_DAYS)
     except Exception as e:                       # noqa: BLE001
         logger.warning(f"Dispersion history unavailable for {symbol}: {e!r}")
         notes.append(f"Dispersion history could not be loaded: {e}")

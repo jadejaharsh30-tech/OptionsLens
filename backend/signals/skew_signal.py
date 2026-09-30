@@ -46,7 +46,7 @@ from market_hours import SessionPhase
 from signals.base import Direction, Signal, SignalContext, SignalResult
 from signals.registry import register_signal
 from skew import MIN_OBSERVATIONS, rr25_from_snapshot, skew_percentile
-from vrp import observations_before
+from vrp import DEFAULT_LOOKBACK, recent_observations
 
 SIGNAL_ID = "skew_rr25"
 VERSION = 1
@@ -57,8 +57,9 @@ MODE_CONTRARIAN = "contrarian"
 MODE_MOMENTUM = "momentum"
 
 
-def _history_before(series: list[dict], session_date: str) -> list[dict]:
-    return observations_before(series, session_date)
+def _history_before(series: list[dict], session_date: str,
+                    lookback: int = DEFAULT_LOOKBACK) -> list[dict]:
+    return recent_observations(series, session_date, lookback)
 
 
 @register_signal(
@@ -74,6 +75,8 @@ def _history_before(series: list[dict], session_date: str) -> list[dict]:
         "rich_puts_percentile":  10.0,   # RR unusually LOW  — puts bid
         "rich_calls_percentile": 90.0,   # RR unusually HIGH — calls bid
         "min_observations": MIN_OBSERVATIONS,
+        # Prior readings ranked against (~2 years); see vrp.DEFAULT_LOOKBACK.
+        "lookback": DEFAULT_LOOKBACK,
         # An intraday reading ranked against a history of closing readings
         # measures the time of day as much as the skew. Off by default; set
         # False deliberately if you have an intraday skew history to match.
@@ -104,7 +107,8 @@ def skew_rr25(ctx: SignalContext) -> SignalResult:
             "no 25-delta pair on this chain — the wings did not trade, or their "
             "nearest strikes sit further than 0.10 delta from 0.25")
 
-    history = _history_before(series, snap.session_date)
+    history = _history_before(series, snap.session_date,
+                              int(ctx.param("lookback", DEFAULT_LOOKBACK)))
     min_obs = int(ctx.param("min_observations", MIN_OBSERVATIONS))
 
     features = {

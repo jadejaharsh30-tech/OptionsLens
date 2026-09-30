@@ -128,13 +128,23 @@ def iter_eod_snapshots(symbol: str, session_date: str,
         if underlying:
             spot_by_expiry[expiry] = float(underlying)
 
+    # Pre-2024-07-08 files publish no underlying price. Estimate it from the
+    # front future, exactly as the importer does (bhavcopy/spot.py), so the
+    # replayed closes and spot_history agree on every legacy date.
+    estimated = None
+    if not any(v and v > 0 for v in spot_by_expiry.values()):
+        from bhavcopy.spot import estimate_spot
+        if futures:
+            from config import RISK_FREE_RATE
+            iso_expiry = datetime.strptime(futures_expiry, "%d-%m-%Y").strftime("%Y-%m-%d")
+            estimated = estimate_spot(futures, iso_expiry, session_date, RISK_FREE_RATE)
+
     ts = _eod_timestamp(session_date)
     for expiry in sorted(by_expiry):
-        spot = spot_by_expiry.get(expiry)
+        spot = spot_by_expiry.get(expiry) or estimated
         if not spot or spot <= 0:
-            # Pre-2024-07-08 files publish no underlying price. Rebuilding it
-            # from the futures rows is listed as not-done in docs/BHAVCOPY.md;
-            # until then, a date without spot is skipped rather than guessed.
+            # Neither a published price nor a traded front future: skip rather
+            # than guess.
             continue
         yield ChainSnapshot(
             ts=ts, session_date=session_date,
@@ -152,24 +162,17 @@ def iter_eod_snapshots(symbol: str, session_date: str,
 def _front_future(conn, symbol: str, session_date: str,
                   ) -> tuple[Optional[float], Optional[str]]:
     """
-    The front-month future's close and expiry for one date, or (None, None).
+    The front-month future's close and expiry (Fyers format), or (None, None).
 
-    Same rules as `futures.load_basis_history`: not yet expiring, and actually
-    traded, because an untraded contract republishes yesterday's close. An
-    archive predating `daily_future` simply yields no futures.
+    Delegates to `bhavcopy.spot.front_future`, the one definition of "front
+    contract" shared with the spot estimate. An archive predating
+    `daily_future` simply yields no futures.
     """
-    try:
-        row = conn.execute("""
-            SELECT expiry_dt, close FROM daily_future
-            WHERE symbol = ? AND trad_dt = ? AND expiry_dt > trad_dt
-              AND close > 0 AND volume > 0
-            ORDER BY expiry_dt LIMIT 1
-        """, (symbol.upper(), session_date)).fetchone()
-    except sqlite3.Error:
+    from bhavcopy.spot import front_future
+    fut = front_future(conn, symbol, session_date)
+    if fut is None:
         return None, None
-    if not row:
-        return None, None
-    return float(row[1]), _fyers_expiry(row[0])
+    return fut[0], _fyers_expiry(fut[1])
 
 
 def available_dates(symbol: str, src_db: str = NSE_EOD_DB) -> list[str]:

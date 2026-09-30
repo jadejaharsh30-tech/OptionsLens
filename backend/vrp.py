@@ -84,6 +84,29 @@ def observations_before(series: list[dict], as_of_date: str) -> list[dict]:
     return [r for r in series if r.get("date") and r["date"] < as_of_date]
 
 
+# How many prior readings a ranked daily signal compares today against: about
+# two years of sessions. This was always the effective window — the loaders
+# kept the most recent 504 dates, so no reading ever had more history than
+# this — but it was a side effect of the loader, not a rule. Once the loaders
+# return the full archive (so that 2008-2024 can be tested at all), leaving it
+# implicit would silently turn every signal into a rank against ALL prior
+# history: a different, slower-moving signal. Stated here instead, and applied
+# by every ranked signal through `recent_observations`.
+DEFAULT_LOOKBACK = 504
+
+
+def recent_observations(series: list[dict], as_of_date: str,
+                        lookback: int = DEFAULT_LOOKBACK) -> list[dict]:
+    """
+    The `lookback` most recent observations strictly before `as_of_date`.
+
+    `observations_before` supplies the look-ahead guard; this adds the window.
+    Assumes `series` is ascending by date, which every loader guarantees.
+    """
+    prior = observations_before(series, as_of_date)
+    return prior[-lookback:] if lookback and lookback > 0 else prior
+
+
 def vrp_percentile(series: list[dict], current_vrp: float,
                    min_observations: int = MIN_OBSERVATIONS) -> Optional[float]:
     """

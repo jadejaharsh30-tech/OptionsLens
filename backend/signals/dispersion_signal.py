@@ -34,7 +34,7 @@ from typing import Optional
 from dispersion import MIN_OBSERVATIONS, corr_percentile
 from signals.base import Direction, Signal, SignalContext, SignalResult
 from signals.registry import register_signal
-from vrp import observations_before
+from vrp import DEFAULT_LOOKBACK, recent_observations
 
 SIGNAL_ID = "dispersion"
 VERSION = 1
@@ -59,6 +59,8 @@ def _todays_row(series: list[dict], session_date: str) -> Optional[dict]:
         "rich_percentile":  80.0,
         "cheap_percentile": 20.0,
         "min_observations": MIN_OBSERVATIONS,
+        # Prior readings ranked against (~2 years); see vrp.DEFAULT_LOOKBACK.
+        "lookback": DEFAULT_LOOKBACK,
     },
     min_history=0,
 )
@@ -79,7 +81,8 @@ def dispersion_signal(ctx: SignalContext) -> SignalResult:
             f"no implied correlation for {session_date} — the index or a basket "
             f"member has no 30-day IV that day")
 
-    history = observations_before(series, session_date)
+    history = recent_observations(series, session_date,
+                                  int(ctx.param("lookback", DEFAULT_LOOKBACK)))
     min_obs = int(ctx.param("min_observations", MIN_OBSERVATIONS))
 
     current = today["implied_corr"]

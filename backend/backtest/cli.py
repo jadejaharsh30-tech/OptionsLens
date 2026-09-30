@@ -167,6 +167,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     c.add_argument("--symbol", default="NIFTY")
     c.add_argument("--signals", default="vrp,term_structure,dispersion",
                    help="comma-separated signal ids")
+    for sp in (r, c):
+        sp.add_argument("--from", dest="start", default=None,
+                        help="first session to replay, YYYY-MM-DD (default: all)")
+        sp.add_argument("--to", dest="end", default=None,
+                        help="last session to replay, YYYY-MM-DD (default: all). "
+                             "Signals still rank against history before --from.")
 
     args = ap.parse_args(argv)
     app_db = args.app_db or config.DB_PATH
@@ -184,6 +190,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     print(f"EOD snapshots for {args.symbol} in {args.db}: {stats['total']} sessions"
           f" ({stats['added']} added this run).")
     dates = recorded_dates(args.symbol, db_path=args.db)
+    if args.start:
+        dates = [d for d in dates if d >= args.start]
+    if args.end:
+        dates = [d for d in dates if d <= args.end]
+    if dates and (args.start or args.end):
+        print(f"Replaying {len(dates)} sessions, {dates[0]} to {dates[-1]}.")
     if not dates:
         print(f"No EOD history for {args.symbol}. Is the archive populated? "
               f"See docs/BHAVCOPY.md.", file=sys.stderr)

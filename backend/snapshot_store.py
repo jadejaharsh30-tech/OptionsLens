@@ -65,6 +65,13 @@ def init_db(db_path: str = DB_PATH):
     cols = {r[1] for r in c.execute("PRAGMA table_info(atm_iv_history)")}
     if "source" not in cols:
         c.execute("ALTER TABLE atm_iv_history ADD COLUMN source TEXT")
+    # Same for closes: most are the exchange's published close, but dates
+    # before 2024-07-08 publish none and carry an ESTIMATE backed out of the
+    # front-month future (bhavcopy/spot.py). NULL on rows written before the
+    # column existed, all of which were published closes.
+    cols = {r[1] for r in c.execute("PRAGMA table_info(spot_history)")}
+    if "source" not in cols:
+        c.execute("ALTER TABLE spot_history ADD COLUMN source TEXT")
     c.execute("""
         CREATE INDEX IF NOT EXISTS idx_atm_iv_symbol_date
         ON atm_iv_history(symbol, snapshot_date)
@@ -128,14 +135,20 @@ def write_spot_price(db_path: str, snapshot_date: str,
 
 
 def write_spot_many(db_path: str,
-                    rows: Iterable[tuple[str, str, float]]) -> int:
-    """Bulk (snapshot_date, symbol, official close). Never overwrites a row."""
+                    rows: Iterable[tuple[str, str, float]],
+                    source: Optional[str] = None) -> int:
+    """
+    Bulk (snapshot_date, symbol, close). Never overwrites a row.
+
+    `source` records provenance: None/"published" for an exchange close,
+    "futures_estimate" for a pre-2024 close backed out of the front future.
+    """
     conn = sqlite3.connect(db_path)
     before = conn.total_changes
     conn.executemany("""
-        INSERT OR IGNORE INTO spot_history (snapshot_date, symbol, spot)
-        VALUES (?, ?, ?)
-    """, list(rows))
+        INSERT OR IGNORE INTO spot_history (snapshot_date, symbol, spot, source)
+        VALUES (?, ?, ?, ?)
+    """, [(d, sym, px, source) for d, sym, px in rows])
     conn.commit()
     added = conn.total_changes - before
     conn.close()

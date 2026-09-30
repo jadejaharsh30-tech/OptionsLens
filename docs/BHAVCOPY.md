@@ -170,11 +170,76 @@ What will and will not work here:
   was an exchange holiday, and the configured stocks had a 30-day IV reading on
   89-100% of dates.
 
+## Downloading history before July 2024 (run at home)
+
+Files before 8 July 2024 use an older format, with no underlying price and
+column spellings that vary by year. This code was written without access to
+those files (NSE blocks datacenter connections), so the run starts with a
+PROBE that shows how each year parses before anything is downloaded in bulk.
+All commands are for `cmd.exe`, from `backend` with the venv active.
+
+**1. Probe: about a minute, writes nothing.**
+
+```
+python -m bhavcopy.download --probe 2001-2024 --stocks --symbols NIFTY,BANKNIFTY,RELIANCE,TCS,HDFCBANK,INFY,ICICIBANK
+```
+
+One line block per year. `OK` means the year parses. `PROBLEM` prints the
+file's headers and what failed to read. **If any year says PROBLEM, stop and
+send the output** — it is exactly what is needed to fix the parser. Also worth
+reading: "requested but absent" lists symbols the year's file does not carry
+(stocks entered F&O at different times; INFY is believed to appear as
+INFOSYSTCH before 2011, which is mapped automatically).
+
+**2. Download.** Roughly 4,300 trading days, 1.5 to 3 hours:
+
+```
+python -m bhavcopy.download --from 2008-01-01 --to 2024-07-05 --stocks --symbols NIFTY,BANKNIFTY,RELIANCE,TCS,HDFCBANK,INFY,ICICIBANK
+```
+
+Safe to stop with Ctrl+C and re-run the same command; finished days are
+skipped. A day whose options could not be parsed is logged as an error and
+retried on the next run — it is never recorded as a day with no options.
+Earlier years can be added later the same way (`--from 2001-01-01 --to
+2007-12-31`).
+
+**3. Check, then import.**
+
+```
+python -m bhavcopy.download --report
+python -m bhavcopy.importer
+```
+
+The importer's `est spot` column counts dates whose underlying price was
+estimated from the front-month future, since these files publish none. The
+estimate is stored as `futures_estimate`, never mixed silently with published
+closes; implied vol does not depend on it (see `bhavcopy/spot.py` for the
+error bound).
+
+**4. The out-of-sample test.** Replay only the years the signals have never
+been tested on, with the parameters UNCHANGED:
+
+```
+python -m backtest.cli run --signal vrp --symbol NIFTY --to 2024-07-05
+python -m backtest.cli run --signal term_structure --symbol NIFTY --to 2024-07-05
+python -m backtest.cli run --signal dispersion --symbol NIFTY --to 2024-07-05
+```
+
+The first run rebuilds several thousand sessions into `eod_snapshots.db` and
+takes a few minutes. Signals still rank each day against the ~504 readings
+before it (`lookback`), so a 2012 reading is compared with 2010-2012, exactly
+as today's is compared with the last two years.
+
+What the older data can and cannot give:
+
+- Stock options were American-style until 2011 (published as CA/PA). They are
+  stored but not priced, so stock IV history starts around 2011.
+  `dispersion` therefore has no basket before then.
+- NIFTY options had only monthly expiries before 2019. The 30-day reading
+  interpolates between two monthlies; far months were thin in early years, so
+  expect gaps (the importer's `CM30 days` column shows how many).
+
 ## Not done yet
 
-- **History before 8 July 2024.** Files go back to 2000, but two fixes are
-  needed first. Some years spell the option-type column differently, which the
-  downloader does not read yet. Older files publish no underlying price, so spot
-  must be rebuilt from the futures rows the downloader already stores. Monthly
-  signals such as VRP and term structure could usefully start around 2008.
-  Weekly-expiry signals only have history from 2016 (BANKNIFTY) and 2019 (NIFTY).
+- **Years before 2008** are supported by the same code; only the date range
+  above stops at 2008. Early far-month liquidity is the likely limit.

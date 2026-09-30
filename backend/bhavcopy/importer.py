@@ -46,6 +46,7 @@ from eod_vol import constant_maturity_iv
 from lot_sizes import record_lot_sizes
 from market_hours import EXPIRY_TIME_IST, IST, time_to_expiry
 from snapshot_store import init_db, write_atm_iv_many, write_spot_many
+from bhavcopy.spot import SOURCE_ESTIMATE, spot_for_date
 
 SOURCE = "bhavcopy"
 
@@ -67,6 +68,9 @@ DEFAULT_MIN_VOLUME = 10
 class SymbolStats:
     dates: int = 0
     dates_without_spot: int = 0
+    # Dates before 2024-07-08, whose close was backed out of the front future
+    # (bhavcopy/spot.py) because the file publishes no underlying price.
+    dates_spot_estimated: int = 0
     expiries_seen: int = 0
     expiries_solved: int = 0
     dates_with_cm30: int = 0
@@ -124,6 +128,7 @@ def _import_symbol(src: sqlite3.Connection, target_db: str, symbol: str,
 
     iv_rows: list[tuple[str, str, str, float]] = []
     spot_rows: list[tuple[str, str, float]] = []
+    est_rows: list[tuple[str, str, float]] = []
 
     for i, day in enumerate(dates):
         st.dates += 1
@@ -136,17 +141,27 @@ def _import_symbol(src: sqlite3.Connection, target_db: str, symbol: str,
             WHERE symbol = ? AND trad_dt = ? AND expiry_dt > trad_dt
         """, (symbol, day)).fetchall()
 
-        spot = next((r[5] for r in rows if r[5]), None)
+        published = next((r[5] for r in rows if r[5]), None)
+        spot, spot_source = spot_for_date(src, symbol, day, published)
         if not spot:
-            # Pre-2024-07-08 files publish no underlying price. Rebuilding spot
-            # from futures is its own piece of work; skip rather than guess.
+            # No published price and no traded front future either: nothing to
+            # anchor the forward's sanity check or the RV series. Skip.
             st.dates_without_spot += 1
             continue
-        spot_rows.append((day, symbol, spot))
+        if spot_source == SOURCE_ESTIMATE:
+            st.dates_spot_estimated += 1
+            est_rows.append((day, symbol, spot))
+        else:
+            spot_rows.append((day, symbol, spot))
 
         chains: dict[str, list[dict]] = defaultdict(list)
         for expiry, strike, opt, close, volume, _u in rows:
             if not close or close <= 0 or not volume or volume < min_volume:
+                continue
+            if opt not in ("CE", "PE"):
+                # CA/PA: American-style stock options (NSE, until 2011). A
+                # Black-76 IV on an American option absorbs the early-exercise
+                # premium and is the wrong number, so they are stored, not priced.
                 continue
             chains[expiry].append({"strike": strike, "option_type": opt,
                                    "ltp": close, "bid": 0, "ask": 0})
@@ -176,6 +191,7 @@ def _import_symbol(src: sqlite3.Connection, target_db: str, symbol: str,
 
     st.iv_rows_added = write_atm_iv_many(target_db, iv_rows, SOURCE)
     st.spot_rows_added = write_spot_many(target_db, spot_rows)
+    st.spot_rows_added += write_spot_many(target_db, est_rows, SOURCE_ESTIMATE)
     return st
 
 
@@ -187,19 +203,23 @@ def _open_read_only(path: str) -> sqlite3.Connection:
 
 def _print_report(stats: dict[str, SymbolStats], min_volume: float) -> None:
     print(f"\nminimum volume per contract: {min_volume:g}\n")
-    print(f"{'symbol':<11}{'dates':>7}{'no spot':>9}{'expiries':>10}{'solved':>8}"
-          f"{'CM30 days':>11}{'CM30 lo':>9}{'CM30 hi':>9}{'IV rows':>9}{'spot':>7}")
+    print(f"{'symbol':<11}{'dates':>7}{'no spot':>9}{'est spot':>10}{'expiries':>10}"
+          f"{'solved':>8}{'CM30 days':>11}{'CM30 lo':>9}{'CM30 hi':>9}{'IV rows':>9}"
+          f"{'spot':>7}")
     for sym, st in stats.items():
         solved = st.expiries_solved / st.expiries_seen * 100 if st.expiries_seen else 0
         lo = f"{min(st.cm30) * 100:.1f}%" if st.cm30 else "—"
         hi = f"{max(st.cm30) * 100:.1f}%" if st.cm30 else "—"
         print(f"{sym:<11}{st.dates:>7,}{st.dates_without_spot:>9,}"
+              f"{st.dates_spot_estimated:>10,}"
               f"{st.expiries_seen:>10,}{solved:>7.0f}%{st.dates_with_cm30:>11,}"
               f"{lo:>9}{hi:>9}{st.iv_rows_added:>9,}{st.spot_rows_added:>7,}")
     print("\n'solved' is the share of listed expiries that produced an ATM IV after the")
     print("volume gate; far months often have no traded ATM strike, which is expected.")
     print("'CM30 days' is how many dates now have a 30-day reading for IV Rank.")
     print("IV rows and spot count only rows added by this run; re-runs add nothing.")
+    print("'est spot' counts pre-2024-07-08 dates whose close was estimated from the")
+    print("front-month future (tagged futures_estimate); IV does not depend on it.")
 
 
 def main() -> int:

@@ -21,15 +21,17 @@ HOW HISTORY REACHES A PURE SIGNAL
     call. The signal never reads a database itself.
 
     Look-ahead is controlled at the point of use: every read goes through
-    `vrp.observations_before(series, session_date)`, which is strictly `<`. The
-    signal cannot see its own observation or any later one, and that is a tested
-    property rather than a convention.
+    `vrp.recent_observations`, built on `observations_before`, which is strictly
+    `<`. The signal cannot see its own observation or any later one, and that is
+    a tested property rather than a convention. It ranks against the most recent
+    `lookback` readings (default 504, about two years), which is what it always
+    effectively did while the loaders kept only 504 dates.
 """
 from typing import Optional
 
 from signals.base import Direction, Signal, SignalContext, SignalResult
 from signals.registry import register_signal
-from vrp import MIN_OBSERVATIONS, observations_before, vrp_percentile
+from vrp import MIN_OBSERVATIONS, DEFAULT_LOOKBACK, recent_observations, vrp_percentile
 
 SIGNAL_ID = "vrp"
 VERSION = 1
@@ -57,6 +59,8 @@ def _todays_row(series: list[dict], session_date: str) -> Optional[dict]:
         "rich_percentile":  80.0,
         "cheap_percentile": 20.0,
         "min_observations": MIN_OBSERVATIONS,
+        # Prior readings ranked against (~2 years); see vrp.DEFAULT_LOOKBACK.
+        "lookback": DEFAULT_LOOKBACK,
         # Refuse to act on a spread this close to zero regardless of percentile:
         # in a flat regime the percentile can be extreme while the spread itself
         # is inside the noise of the IV measurement.
@@ -87,7 +91,8 @@ def vrp_signal(ctx: SignalContext) -> SignalResult:
 
     # Strictly prior observations only. Including today would rank a value
     # against a set containing itself.
-    history = observations_before(series, session_date)
+    history = recent_observations(series, session_date,
+                                  int(ctx.param("lookback", DEFAULT_LOOKBACK)))
     min_obs = int(ctx.param("min_observations", MIN_OBSERVATIONS))
 
     current = today["vrp"]
