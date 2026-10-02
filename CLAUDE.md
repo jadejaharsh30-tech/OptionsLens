@@ -4,6 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Read this first
 
+**`docs/METHODOLOGY.md` explains WHY the system is built as it is** (pricing, IV identifiability, constant maturity, look-ahead, significance under overlap, results so far) — update it when a decision there changes.
+
 **`docs/ROADMAP.md` is the project's durable memory.** It holds the 63-item
 phased checklist (signal research → backtesting → trade lifecycle → notifications
 → education layer),

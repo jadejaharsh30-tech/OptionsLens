@@ -287,7 +287,10 @@ or is pinned to it by a test.
   Minimum set: first backtest end to end; the daily operating routine (validate
   token → recorder runs → check coverage); signal → paper trade → journal; adding
   an underlying; what to do when the recorder missed a day
-- [ ] 60. **Methodology write-up** — the quant reasoning consolidated in one place:
+- [x] 60. **Methodology write-up** — DONE 2026-10-02 as `docs/METHODOLOGY.md`:
+  the reasoning behind every pricing, data and statistical choice, with the
+  measured numbers and the results so far, including the ones that went
+  against the design. Originally: — the quant reasoning consolidated in one place:
   why Black-76 against an implied forward and never spot, why total-variance
   interpolation, why a vega identifiability gate, why matched nulls, why
   percentile rank, why paper reuses the backtester's cost model. This is also the
