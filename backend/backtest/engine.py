@@ -28,7 +28,11 @@ from backtest.vol_labels import (
     iv_by_date_from_extras, vol_horizon_keys,
 )
 from backtest.metrics import BacktestStats, horizon_stats, interpret
-from backtest.significance import ALPHA, circular_shift_test, horizon_sessions
+from backtest.significance import (
+    ALPHA, circular_shift_test, horizon_sessions, intraday_outcomes,
+    session_shift_test,
+)
+from backtest.labels import EOD_LABEL, HORIZONS_MIN
 from backtest.replay import replay_range
 from market_hours import IST
 from recorder.store import recorded_dates, session_snapshot_counts
@@ -245,6 +249,11 @@ def run_backtest(
             resolved_mode, fired_entries, session_series, symbol, extras, horizons)
         _apply_shift_tests(run, signs, outcomes)
         run.by_direction = _by_direction(signs, outcomes, names)
+    else:
+        fires, outcomes, n_sessions = _intraday_fire_outcomes(
+            fired_entries, session_series, horizons)
+        _apply_session_shift_tests(run, fires, outcomes, n_sessions)
+        run.by_direction = _by_direction_intraday(fires, outcomes, n_sessions)
 
     stats = BacktestStats(
         signal_id = spec.signal_id,
@@ -275,10 +284,11 @@ def run_backtest(
         )
     else:
         run.notes.append(
-            "Intraday verdicts still use a Welch t-test, which treats "
-            "overlapping horizons as independent and OVERSTATES significance "
-            "(measured at ~7x on daily horizons). Treat an intraday EDGE as a "
-            "lead, not a result."
+            "Verdicts use a session-shift test: each session's whole firing "
+            "pattern, at the same clock times, moved onto every other session. "
+            "It keeps time-of-day matching, runs of consecutive fires and the "
+            "overlap of their outcomes, which a t-test would count as "
+            "independent evidence. Needs at least 20 sessions to resolve."
         )
 
     if resolved_mode == "daily":
@@ -538,4 +548,90 @@ def _by_direction(signs, outcomes, names) -> dict[str, dict]:
                 "verdict": _direction_verdict(len(fired), t.edge, t.p_value),
             }
         out[name] = {"fires": sum(1 for s in own if s), "horizons": per_h}
+    return out
+
+
+
+# ── Intraday significance: shift whole sessions ──────────────────────────────
+
+def _horizon_minutes(horizons: list[str]) -> dict[str, Optional[int]]:
+    out: dict[str, Optional[int]] = {}
+    for h in horizons:
+        if h == EOD_LABEL:
+            out[h] = None
+        elif h.endswith("m") and h[:-1].isdigit():
+            out[h] = int(h[:-1])
+    return out
+
+
+def _intraday_fire_outcomes(fired_entries, session_series, horizons):
+    """
+    Every fire as (session index, clock, sign), and per horizon the outcome of
+    a +1 position from every bar of every session, keyed by (session, clock).
+    """
+    dates = sorted(session_series)
+    index_of = {d: i for i, d in enumerate(dates)}
+    minutes = _horizon_minutes(horizons)
+
+    outcomes: dict[str, dict[tuple[int, str], Optional[float]]] = \
+        {h: {} for h in minutes}
+    for i, d in enumerate(dates):
+        timestamps, spots = session_series[d]
+        per_h = intraday_outcomes(timestamps, spots, minutes)
+        for h, vals in per_h.items():
+            for ts, v in zip(timestamps, vals):
+                outcomes[h][(i, ts[11:16])] = v
+
+    fires = [(index_of[d], ts[11:16], sign)
+             for d, ts, sign, _name in fired_entries if d in index_of]
+    return fires, outcomes, len(dates)
+
+
+def _apply_session_shift_tests(run: "BacktestRun", fires, outcomes,
+                               n_sessions) -> None:
+    for h, cmp_ in run.comparison.items():
+        if h not in outcomes:
+            continue
+        t = session_shift_test(fires, outcomes[h], n_sessions)
+        cmp_.shift_edge, cmp_.shift_p = t.edge, t.p_value
+        cmp_.shift_offsets = t.n_offsets
+        cmp_.test = "session_shift"
+        cmp_.beats_null = cmp_.verdict() == "EDGE"
+
+
+def _by_direction_intraday(fires, outcomes, n_sessions) -> dict[str, dict]:
+    """
+    Long and short fires tested separately, each against what that direction
+    earned at the SAME clock times on an average session.
+    """
+    out: dict[str, dict] = {}
+    for sign, name in ((1, "BULLISH"), (-1, "BEARISH")):
+        own = [f for f in fires if f[2] == sign]
+        if not own:
+            continue
+        per_h = {}
+        for h, ys in outcomes.items():
+            by_clock: dict[str, list[float]] = {}
+            for (_, c), v in ys.items():
+                if v is not None:
+                    by_clock.setdefault(c, []).append(v)
+            mean_at = {c: sum(v) / len(v) for c, v in by_clock.items()}
+            fired = [(sign * ys[(s, c)], sign * mean_at[c]) for s, c, _ in own
+                     if ys.get((s, c)) is not None and c in mean_at]
+            if not fired:
+                per_h[h] = {"n": 0, "mean": None, "baseline": None, "edge": None,
+                            "shift_p": None, "verdict": "INSUFFICIENT_DATA"}
+                continue
+            t = session_shift_test(own, ys, n_sessions)
+            mean = sum(v for v, _ in fired) / len(fired)
+            baseline = sum(b for _, b in fired) / len(fired)
+            per_h[h] = {
+                "n": len(fired),
+                "mean": round(mean, 4),
+                "baseline": round(baseline, 4),
+                "edge": round(mean - baseline, 4),
+                "shift_p": t.p_value,
+                "verdict": _direction_verdict(len(fired), t.edge, t.p_value),
+            }
+        out[name] = {"fires": len(own), "horizons": per_h}
     return out

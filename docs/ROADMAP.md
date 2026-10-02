@@ -319,6 +319,14 @@ or is pinned to it by a test.
 
 Append one line per session. Keep it terse.
 
+- **2026-10-02 (23)** — Home laptop set up as a second clone (Python 3.11
+  venv, 533 passing); `.venv` added to `.gitignore`. Full 2000-to-today
+  download running there. Intraday significance fixed with a session-shift
+  test, so no verdict in the backtester is decided by the Welch t any more.
+  Consequence for the Research page: intraday runs on the recorder's data
+  read INSUFFICIENT_DATA until 20 sessions exist, rather than an EDGE the
+  old test would have overstated. 539 tests pass.
+
 - **2026-09-30 (22)** — FIRST LOOK AT REAL LEGACY FILES, via `--probe
   2001-2024` from the user's OFFICE network: NSE is reachable from there, so
   "home connection only" was too strong — it blocks datacenters, not every
@@ -579,8 +587,11 @@ Append one line per session. Keep it terse.
   2026-09-29 for daily and vol modes** (`backtest/significance.py`); the
   circular-shift test now decides the verdict, results are split by
   direction, and a seeded test pins both the fix and the old failure (8% vs
-  40% on 60 no-edge worlds). **Intraday is still open** — its horizons overlap
-  too and it still uses the Welch t, with a warning note on every run.
+  40% on 60 no-edge worlds). **Intraday FIXED 2026-10-02** with a
+  session-shift test (whole sessions moved, clock times kept, outcomes
+  centred per clock time): Welch 37%/60% false EDGE at 15m/eod on no-edge
+  simulations, session shift 5.3%/6.7%; detects a 1 bp-per-fire edge 85% of
+  the time over 40 sessions. Needs 20 sessions to return any verdict.
   Original finding: `benchmark.compare` runs a Welch t-test treating every
   labelled observation as independent. Signals like `vrp` and `dispersion`
   fire in long runs, and consecutive 20-session outcomes share 19 of 20 days,

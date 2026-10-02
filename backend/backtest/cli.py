@@ -91,13 +91,13 @@ def print_run(run: dict, notes: list[str]) -> None:
         print(f"  · {n}")
 
     if run["horizons"]:
-        shift = any(r.get("test") == "circular_shift" for r in run["horizons"].values())
+        shift = any(r.get("test") not in (None, "welch") for r in run["horizons"].values())
         stat = "p" if shift else "t"
         print(f"\n{'horizon':<8}{'n':>6}{'hit %':>8}{'signal':>10}{'null':>10}"
               f"{'edge':>10}{stat:>9}  verdict")
         for h, row in run["horizons"].items():
             sig, null = row["signal"], row["null"]
-            val = row.get("shift_p") if row.get("test") == "circular_shift" \
+            val = row.get("shift_p") if row.get("test") not in (None, "welch") \
                 else row["edge_t_stat"]
             print(f"{h:<8}{sig['n']:>6}{_fmt(sig['hit_rate_pct'], 1):>8}"
                   f"{_fmt(sig['mean_bps']):>10}{_fmt(null['mean_bps']):>10}"
@@ -106,8 +106,8 @@ def print_run(run: dict, notes: list[str]) -> None:
         print(f"\nsignal / null / edge are mean outcomes in {unit}; the null is "
               f"random entries matched on weekday.")
         if shift:
-            print("p is from the circular-shift test (EDGE needs p <= 0.05); it "
-                  "accounts for overlapping outcomes and runs of fires.")
+            print("p is from a shift test (EDGE needs p <= 0.05); it accounts "
+                  "for overlapping outcomes and runs of fires.")
 
     if run.get("by_direction"):
         print(f"\nBy direction — baseline is what that direction earned on an "

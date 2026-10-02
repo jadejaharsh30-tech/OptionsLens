@@ -44,12 +44,14 @@ class BenchmarkComparison:
     shift_edge:      Optional[float] = None
     shift_p:         Optional[float] = None
     shift_offsets:   int = 0
-    test:            str = "welch"              # "welch" or "circular_shift"
+    # "welch" (no longer decides any verdict the engine produces),
+    # "circular_shift" (daily/vol) or "session_shift" (intraday).
+    test:            str = "welch"
 
     def verdict(self) -> str:
         if self.signal.n < 30:
             return "INSUFFICIENT_DATA"
-        if self.test == "circular_shift":
+        if self.test != "welch":
             if self.shift_p is None or self.shift_edge is None:
                 return "INSUFFICIENT_DATA"
             if self.shift_p > ALPHA:

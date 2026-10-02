@@ -212,3 +212,193 @@ def test_daily_runs_report_the_shift_test_and_intraday_runs_warn():
         assert row["shift_offsets"] >= MIN_OFFSETS
     assert set(run["by_direction"]) == {"BULLISH", "BEARISH"}
     assert any("circular-shift" in n for n in run["notes"])
+
+
+# ── Intraday: the session-shift test ──────────────────────────────────────────
+
+def _intraday_world(rng, n_sessions=25, bars=60, edge=0.0):
+    """
+    Minute sessions with two traps and NO edge unless `edge` is set: fires come
+    in runs (overlapping outcomes), and both the price and the signal lean
+    towards the morning (a test not matched on clock time would see "edge").
+    Returns (fires, outcomes_by_horizon, n_sessions) in the engine's shapes.
+    """
+    from backtest.significance import intraday_outcomes
+
+    minutes = {"15m": 15, "eod": None}
+    fires, outcomes = [], {h: {} for h in minutes}
+    for s in range(n_sessions):
+        spots, x, level, sess_fires = [], 0.0, rng.gauss(0, 1), []
+        price = 100.0
+        for t in range(bars):
+            price *= math.exp((0.00004 if t < 15 else 0.0) + rng.gauss(0, 0.0005))
+            x = 0.9 * x + rng.gauss(0, 0.5)
+            fire = (x + level + (0.8 if t < 15 else 0.0)) > 1.6
+            sess_fires.append(fire)
+            spots.append(price)
+        if edge:
+            for t in range(bars - 1):
+                if sess_fires[t]:
+                    for k in range(t + 1, bars):
+                        spots[k] *= 1 + edge / 1e4
+        stamps = [f"2026-01-{s % 28 + 1:02d}T{9 + (15 + t) // 60:02d}:"
+                  f"{(15 + t) % 60:02d}:00+05:30" for t in range(bars)]
+        for h, vals in intraday_outcomes(stamps, spots, minutes).items():
+            for ts, v in zip(stamps, vals):
+                outcomes[h][(s, ts[11:16])] = v
+        fires += [(s, stamps[t][11:16], 1) for t in range(bars) if sess_fires[t]]
+    return fires, outcomes, n_sessions
+
+
+def _welch_intraday(fires, outcomes, n_sessions, rng):
+    """The old intraday test: fires vs same-clock random sessions, as independent."""
+    sig = [outcomes[(s, c)] for s, c, _ in fires if outcomes.get((s, c)) is not None]
+    null = []
+    for s, c, _ in fires:
+        for _ in range(10):
+            v = outcomes.get((rng.randrange(n_sessions), c))
+            if v is not None:
+                null.append(v)
+    if len(sig) < 3 or len(null) < 3:
+        return None
+    def st(xs):
+        m = sum(xs) / len(xs)
+        return m, math.sqrt(sum((x - m) ** 2 for x in xs) / (len(xs) - 1)), len(xs)
+    return _welch_t(*st(sig), *st(null))
+
+
+def test_intraday_no_edge_worlds_pass_the_session_shift_test_rarely():
+    from backtest.significance import session_shift_test
+
+    rng = random.Random(4)
+    shift_hits = welch_hits = worlds = 0
+    for _ in range(40):
+        fires, outcomes, n = _intraday_world(rng)
+        t = session_shift_test(fires, outcomes["eod"], n)
+        if t.p_value is None:
+            continue
+        worlds += 1
+        shift_hits += t.p_value <= 0.05
+        w = _welch_intraday(fires, outcomes["eod"], n, rng)
+        welch_hits += w is not None and abs(w) >= 2.0
+    assert worlds >= 35
+    assert shift_hits / worlds <= 0.15            # ~5% target, loose for 40 worlds
+    assert welch_hits / worlds >= 0.25            # the old test's failure, pinned
+    assert welch_hits > 2 * shift_hits
+
+
+def test_intraday_real_edge_is_detected():
+    from backtest.significance import session_shift_test
+
+    rng = random.Random(8)
+    hits = 0
+    for _ in range(15):
+        fires, outcomes, n = _intraday_world(rng, edge=2.0)
+        t = session_shift_test(fires, outcomes["15m"], n)
+        hits += t.p_value is not None and t.p_value <= 0.05 and t.edge > 0
+    assert hits >= 11
+
+
+def test_session_shift_needs_twenty_sessions():
+    """19 offsets is the least that can reach p 0.05; fewer is no verdict."""
+    from backtest.significance import session_shift_test
+
+    rng = random.Random(1)
+    fires, outcomes, n = _intraday_world(rng, n_sessions=12)
+    t = session_shift_test(fires, outcomes["eod"], n)
+    assert t.n_offsets == 11 and t.p_value is None
+
+
+def test_morning_drift_earns_no_credit():
+    """
+    Outcomes are centred per clock time, so a signal that merely fires during a
+    drifting morning has an edge near zero, not the drift.
+    """
+    from backtest.significance import session_shift_test
+
+    fires = [(s, "09:20", 1) for s in range(30)]
+    outcomes = {(s, c): (5.0 if c == "09:20" else 0.0) + (0.1 if s % 2 else -0.1)
+                for s in range(30) for c in ("09:20", "14:00")}
+    t = session_shift_test(fires, outcomes, 30)
+    assert abs(t.edge) < 1e-9
+
+
+def test_fast_outcomes_match_the_labeller_exactly():
+    """
+    The shift test needs an outcome for every bar; the labeller is too slow for
+    that, so a one-pass version exists. It must be the same number, including
+    on a session with missing minutes and near the close.
+    """
+    from backtest.labels import compute_forward_returns, horizon_keys
+    from backtest.significance import intraday_outcomes
+
+    rng = random.Random(6)
+    stamps, spots, p = [], [], 24000.0
+    for t in range(120):
+        if t in (17, 18, 55, 90):                      # gaps in the recording
+            continue
+        stamps.append(f"2026-03-02T{9 + (15 + t) // 60:02d}:{(15 + t) % 60:02d}:00+05:30")
+        p *= 1 + rng.gauss(0, 0.0004)
+        spots.append(p)
+    minutes = {k: (None if k == "eod" else int(k[:-1])) for k in horizon_keys()}
+    fast = intraday_outcomes(stamps, spots, minutes)
+    for i in range(len(stamps)):
+        slow = compute_forward_returns(i, stamps, spots, "NIFTY").returns_bps
+        for k in minutes:
+            assert fast[k][i] == slow[k], (i, k)
+
+
+def test_intraday_runs_report_the_session_shift_test():
+    import os
+    import tempfile
+
+    from backtest.engine import run_backtest
+    from market_hours import SessionPhase
+    from recorder.models import ChainRow, ChainSnapshot
+    from recorder.store import init_db, write_snapshots
+    from signals.base import Direction, Signal, SignalResult
+    from signals.registry import _REGISTRY, register_signal
+
+    if "sig_probe_intraday.v1" not in _REGISTRY:
+        @register_signal("sig_probe_intraday", version=1, min_history=0)
+        def _probe(ctx):
+            minute = int(ctx.ts[14:16])
+            if minute % 10:
+                return SignalResult.skip("sig_probe_intraday", 1, ctx, "off")
+            d = Direction.BULLISH if minute % 20 else Direction.BEARISH
+            return SignalResult.fire(Signal(
+                signal_id="sig_probe_intraday", version=1, ts=ctx.ts,
+                symbol=ctx.symbol, direction=d, strength=0.5))
+
+    import datetime as dt
+    days, d = [], dt.date(2026, 1, 5)
+    while len(days) < 22:
+        if d.weekday() < 5:
+            days.append(d.isoformat())
+        d += dt.timedelta(days=1)
+
+    rng = random.Random(2)
+    with tempfile.TemporaryDirectory() as tmp:
+        db = os.path.join(tmp, "m.db")
+        init_db(db)
+        batch = []
+        for day in days:
+            p = 24000.0
+            for t in range(90):
+                p *= 1 + rng.gauss(0, 0.0004)
+                batch.append(ChainSnapshot(
+                    ts=f"{day}T{9 + (15 + t) // 60:02d}:{(15 + t) % 60:02d}:00+05:30",
+                    session_date=day, session_phase=SessionPhase.CONTINUOUS,
+                    symbol="NIFTY", expiry_date="29-12-2026", expiry_epoch=1,
+                    spot=p, rows=(ChainRow(strike=24000.0, option_type="CE",
+                                           ltp=100.0),)))
+        write_snapshots(batch, db)
+        run = run_backtest("sig_probe_intraday", "NIFTY", db_path=db,
+                           persist_evaluations=False).to_dict()
+
+    assert run["label_mode"] == "intraday"
+    for h, row in run["horizons"].items():
+        assert row["test"] == "session_shift", h
+        assert row["shift_offsets"] == 21
+    assert set(run["by_direction"]) == {"BULLISH", "BEARISH"}
+    assert any("session-shift" in n for n in run["notes"])
