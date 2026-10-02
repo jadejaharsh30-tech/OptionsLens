@@ -326,6 +326,15 @@ or is pinned to it by a test.
 
 Append one line per session. Keep it terse.
 
+- **2026-10-02 (26)** — PRE-REGISTERED OUT-OF-SAMPLE TEST RUN on NIFTY
+  2001-2024: no signal survives (vrp p 0.803, term_structure p 0.306 with the
+  sign flipped, dispersion p 0.878). Full reading under "Open questions". The
+  unconditional short-vol premium (+1.80 vol pts per 20 sessions) is real;
+  timing it with these percentile signals is not shown. BANKNIFTY secondary
+  pending. Importer note: each incremental run re-processes ~11,000
+  symbol-dates that can never solve (CA/PA stock years, early BANKNIFTY
+  dates with 0% solved), because "already imported" means "has an IV row".
+
 - **2026-10-02 (25)** — DAILY SIGNAL RUNNER (item 52, signals half). Until now
   signals only ran inside backtests, so the system could not say what fired
   today. `daily_signals.py` evaluates every daily signal once per symbol per
@@ -614,6 +623,31 @@ Append one line per session. Keep it terse.
 ---
 
 ## Open questions / decisions to revisit
+
+- **RESULT OF THE PRE-REGISTERED TEST (run 2026-10-02): NO SIGNAL SURVIVES.**
+  NIFTY, 5,710 sessions 2001-06-04 to 2024-07-05, default parameters,
+  20d_vol aggregate row, circular-shift p:
+  - `vrp`: edge +0.19 vol pts, p 0.803 (in-sample +0.89). Fails on p.
+  - `term_structure`: edge +0.52, p 0.306 (in-sample −0.35). Fails on p AND
+    the sign flipped, so neither sample's figure was more than noise.
+  - `dispersion` (2011 onward, 1,600 basket dates): edge +0.47, p 0.878.
+    Fails on p.
+  Stability split not run (no survivor). `daily_signals.VALIDATED` stays empty.
+  **Recorded as not a finding:** `term_structure` 10d_vol said EDGE at
+  p 0.032. It is not the headline horizon, it is above the 0.017 bar, and it
+  is one of nine signal × horizon cells, where one p near 0.03 is roughly what
+  chance alone produces. Promoting it now would be exactly the rescue the
+  protocol was written to forbid.
+  **What the data did show:** the UNCONDITIONAL premium is real and large. On
+  an average session, SHORT_VOL earned +1.80 vol pts at 20 sessions (implied
+  above subsequent realised) and LONG_VOL −1.80. None of the three signals
+  timed it measurably better than holding it every day. (The 5-session
+  baseline, +4.38, is inflated: realised vol from five returns is biased low.
+  That is why 20 sessions is the headline.) Any strategy built on that
+  premium is a NEW hypothesis on seen data, so it must be pre-registered and
+  judged on data not yet used: the forward record from the live recorder and
+  `daily_signals`.
+  Secondary (BANKNIFTY, same rules): pending.
 
 - **PRE-REGISTERED OUT-OF-SAMPLE TEST — written 2026-10-02, BEFORE any result.**
   The three signals were examined on NIFTY sessions from 2024-07-08 onward.

@@ -293,11 +293,32 @@ Two things the data said that the design had assumed otherwise:
   would have counted one regime three times. No ensemble exists yet,
   deliberately.
 
-**The next test is out of sample, and its decision rule was committed
-before it ran** (see the pre-registered protocol in `docs/ROADMAP.md`). The 2024-2026 period has now been
-examined, so the signals are not tuned on it. Pre-2024 history (NIFTY options
-from mid-2001, stock IV from 2011) has never been seen by these signals, and it is
-the test of them as they stand.
+**The out-of-sample test, with its rule committed before it ran** (the
+pre-registered protocol in `docs/ROADMAP.md`). The 2024-2026 period had been
+examined, so the signals were frozen as they stood and run on NIFTY's unseen
+history: 5,710 sessions, June 2001 to July 2024 (implied correlation from 2011,
+when stock options became European). A signal had to reach p ≤ 0.017 (0.05
+across three signals) at the 20-session horizon, with the in-sample sign.
+
+| Signal | In-sample edge | Out-of-sample edge | p | Survives |
+|---|---|---|---|---|
+| Variance risk premium | +0.89 | +0.19 | 0.803 | no |
+| Term structure | −0.35 | +0.52 | 0.306 | no, and the sign flipped |
+| Implied correlation | +1.29 | +0.47 | 0.878 | no |
+
+**None survives.** One cell outside the headline reached p = 0.032 (term
+structure, 10 sessions). It is above the bar, it is not the horizon named in
+advance, and with nine signal-horizon cells one such p-value is about what
+chance produces. It is recorded as not a finding.
+
+**What the history did show** is that the premium itself is real. On an
+average session, a short-volatility position earned about **+1.8 vol points**
+over the following 20 sessions (implied above what was subsequently
+realised), and a long one lost the same. The three signals did not time that
+premium measurably better than holding it every day. A strategy built on the
+unconditional premium is a new hypothesis on data that has now been seen, so
+it gets its own pre-registration and is judged only on data not yet used: the
+forward record the daily runner now keeps.
 
 ## 11. Engineering choices that protect the numbers
 
