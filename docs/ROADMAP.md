@@ -233,7 +233,11 @@ differentiator. This is another reason the recorder is urgent.
 - [x] 49. **Telegram** — HTML-escaped, length-capped, lazily imported. `verify` distinguishes a bad token from a bad chat_id. (Inline ack/suppress buttons not yet wired — needs a webhook.)
 - [ ] 50. Notification rules — dedupe, quiet hours, severity routing
 - [ ] 51. Web push / email fallback
-- [ ] 52. Daily EOD digest — signals fired, trades taken, P&L, data-coverage report
+- [~] 52. Daily EOD digest — signals fired, trades taken, P&L, data-coverage report
+  **Signals half done 2026-10-02** (`daily_signals.py`): every daily signal on
+  each session, logged, one Telegram digest per session. Still to add: trades
+  taken, P&L and recorder coverage (`notify.events.daily_digest` exists for
+  those but nothing calls it yet).
 - [ ] 53. WhatsApp via Meta Business API or Twilio (heavyweight — last, only if genuinely wanted)
 
 ### Phase 7 — Platform hardening
@@ -321,6 +325,20 @@ or is pinned to it by a test.
 ## Progress log
 
 Append one line per session. Keep it terse.
+
+- **2026-10-02 (25)** — DAILY SIGNAL RUNNER (item 52, signals half). Until now
+  signals only ran inside backtests, so the system could not say what fired
+  today. `daily_signals.py` evaluates every daily signal once per symbol per
+  session through the backtester's own replay and extras path, logs it, and
+  sends one digest (FIRED / QUIET / UNAVAILABLE, every fire labelled
+  unvalidated). The app runs it at 16:05 IST on the recorder's bars; at home,
+  `python -m daily_signals --source eod --notify` runs it on the newest
+  bhavcopy session. Skew history is now loaded only as far back as its ranking
+  window needs, exactly. A new test caught the skew loader creating a missing
+  recorder store while reading it; the runner no longer reads a store that is
+  not there. Not built: auto paper-trading on a fire, the intraday runner
+  (gex_regime, oi_buildup), and the trades/P&L half of the digest. 561 tests
+  pass.
 
 - **2026-10-02 (24)** — FULL ARCHIVE LANDED on the home laptop: 6,482 days,
   18.3M option rows, 2001-06-04 to 2026-10-01; NIFTY 30-day IV on 5,638 of

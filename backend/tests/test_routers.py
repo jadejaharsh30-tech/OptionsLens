@@ -445,3 +445,14 @@ def test_expiries_endpoint(client, monkeypatch):
     r = client.get("/api/expiries/NIFTY", headers=HEADERS)
     assert r.status_code == 200
     assert r.json()["expiries"][0]["date"] == "29-10-2026"
+
+
+def test_startup_schedules_the_daily_signal_run(client):
+    """After the 15:50 close capture, in IST — the run reads that close."""
+    from scheduler import scheduler
+
+    job = scheduler.get_job("daily_signals")
+    assert job is not None
+    fields = {f.name: str(f) for f in job.trigger.fields}
+    assert (fields["hour"], fields["minute"]) == ("16", "5")
+    assert str(job.trigger.timezone) == "Asia/Kolkata"

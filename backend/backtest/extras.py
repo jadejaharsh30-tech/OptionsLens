@@ -30,12 +30,28 @@ ALL_HISTORY_DAYS = 100_000
 class _Sources:
     app_db: str
     snapshot_db: Optional[str]
+    # Set only by a caller evaluating ONE date (the daily runner): series that
+    # are expensive to rebuild stop once they hold `max_prior_readings` before
+    # `until`. See skew.load_skew_history for why that is exact, not approximate.
+    until: Optional[str] = None
+    max_prior_readings: Optional[int] = None
 
 
 def build_extras(symbol: str, signal_id: Optional[str] = None,
                  app_db: Optional[str] = None,
                  snapshot_db: Optional[str] = None,
                  ) -> tuple[dict, list[str]]:
+    """One signal's history; see `build_extras_for` for what is built."""
+    return build_extras_for(symbol, [signal_id] if signal_id else [],
+                            app_db=app_db, snapshot_db=snapshot_db)
+
+
+def build_extras_for(symbol: str, signal_ids: list[str],
+                     app_db: Optional[str] = None,
+                     snapshot_db: Optional[str] = None,
+                     until: Optional[str] = None,
+                     max_prior_readings: Optional[int] = None,
+                     ) -> tuple[dict, list[str]]:
     """
     Assemble the history a signal cannot reach on its own.
 
@@ -63,15 +79,19 @@ def build_extras(symbol: str, signal_id: Optional[str] = None,
                    pass the materialised EOD file for a history run), which the
                    skew and CAS series are built from so they describe exactly
                    the bars the signal will be evaluated on
+
+    Several signals at once (the daily runner) share the one VRP load rather
+    than repeating it per signal.
     """
     extras: dict[str, Any] = {}
     notes: list[str] = []
 
-    src = _Sources(app_db or config.DB_PATH, snapshot_db)
+    src = _Sources(app_db or config.DB_PATH, snapshot_db, until, max_prior_readings)
     _add_vrp_extras(symbol, extras, notes, src)
-    builder = SIGNAL_SERIES.get(signal_id or "")
-    if builder is not None:
-        builder(symbol, extras, notes, src)
+    for signal_id in dict.fromkeys(signal_ids):
+        builder = SIGNAL_SERIES.get(signal_id or "")
+        if builder is not None:
+            builder(symbol, extras, notes, src)
     return extras, notes
 
 
@@ -151,7 +171,8 @@ def _add_skew_extras(symbol: str, extras: dict, notes: list[str],
     from skew import load_skew_history, summarise
 
     try:
-        series = load_skew_history(src.snapshot_db, symbol)
+        series = load_skew_history(src.snapshot_db, symbol, until=src.until,
+                                   max_prior_readings=src.max_prior_readings)
     except Exception as e:                       # noqa: BLE001
         logger.warning(f"Skew history unavailable for {symbol}: {e!r}")
         notes.append(f"Skew history could not be loaded: {e}")

@@ -16,6 +16,9 @@ IV_SNAPSHOT_TIME_IST = "15:10"
 # The official close only exists after the auction settles, so closing prices
 # are captured separately once derivatives have stopped trading.
 EOD_CLOSE_TIME_IST   = "15:50"
+# Daily signals run on the session that just closed (daily_signals.py). After
+# the close capture, because realised vol includes today's official close.
+SIGNAL_RUN_TIME_IST  = "16:05"
 
 SNAPSHOT_TIME_IST = IV_SNAPSHOT_TIME_IST   # deprecated alias
 

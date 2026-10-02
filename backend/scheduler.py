@@ -12,6 +12,16 @@ Two jobs, split by CAS (the closing auction, live 3 Aug 2026):
   15:50 IST  run_eod_close_capture  — official closing prices, taken after the
                                       auction settles and derivatives stop.
 
+A third job reads what the first two wrote:
+
+  16:05 IST  run_daily_signals      — every daily signal on today's recorded
+                                      bars, logged, plus a digest to the
+                                      configured notification channels
+                                      (daily_signals.py). Reads local stores
+                                      only, so it runs with or without a token;
+                                      a day whose data never arrived is
+                                      reported as such rather than skipped.
+
 Splitting them is the point. A single 15:20 job sat inside the auction window,
 where F&O-eligible cash stocks have no continuous trading, and recorded a stale
 pre-auction print as the day's close.
@@ -19,6 +29,7 @@ pre-auction print as the day's close.
 Token registration: when the user validates their token via /api/auth/validate
 it is registered here for the cron jobs. Without one, both skip gracefully.
 """
+import asyncio
 import logging
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -33,7 +44,7 @@ from recorder.store import write_eod_close
 from snapshot_store import init_db, write_iv_snapshot, write_atm_iv, write_spot_price
 from config import (
     UNDERLYINGS, RISK_FREE_RATE, DB_PATH,
-    IV_SNAPSHOT_TIME_IST, EOD_CLOSE_TIME_IST,
+    IV_SNAPSHOT_TIME_IST, EOD_CLOSE_TIME_IST, SIGNAL_RUN_TIME_IST,
 )
 
 logger    = logging.getLogger(__name__)
@@ -192,6 +203,28 @@ async def run_eod_close_capture():
     logger.info(f"EOD close capture complete for {today} — {captured} symbols.")
 
 
+async def run_daily_signals():
+    """
+    Runs at 16:05 IST: every daily signal on today's recorded bars, then the
+    digest. Errors are logged, never raised into the scheduler.
+    """
+    from daily_signals import notify_report, run_daily
+
+    now = now_ist()
+    if not is_trading_day(now.date()):
+        logger.info("Daily signals skipped — not a trading day.")
+        return
+    today = now.date().isoformat()
+    try:
+        # The loaders are synchronous SQLite reads; keep them off the loop.
+        report = await asyncio.to_thread(run_daily, today, "recorder")
+        outcome = await notify_report(report)
+        logger.info(f"Daily signals for {today}: "
+                    f"{report.to_dict()['counts']}; digest {outcome}")
+    except Exception as e:
+        logger.error(f"Daily signal run failed for {today}: {e!r}")
+
+
 def start_scheduler():
     """
     Starts the APScheduler background jobs.
@@ -225,8 +258,19 @@ def start_scheduler():
                                   # late run is still correct
     )
 
+    sig_hour, sig_min = (int(x) for x in SIGNAL_RUN_TIME_IST.split(":"))
+    scheduler.add_job(
+        run_daily_signals,
+        CronTrigger(hour=sig_hour, minute=sig_min, timezone="Asia/Kolkata"),
+        id="daily_signals",
+        replace_existing=True,
+        misfire_grace_time=3600,  # the session's data does not change after
+                                  # the close, so a late run is still correct
+    )
+
     scheduler.start()
     logger.info(
         f"APScheduler started. IV snapshot {IV_SNAPSHOT_TIME_IST} IST "
-        f"(pre-auction), EOD close {EOD_CLOSE_TIME_IST} IST (post-auction)."
+        f"(pre-auction), EOD close {EOD_CLOSE_TIME_IST} IST (post-auction), "
+        f"daily signals {SIGNAL_RUN_TIME_IST} IST."
     )

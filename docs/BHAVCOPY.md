@@ -73,9 +73,66 @@ cd /d C:\path\to\OptionsLens\backend
 call .venv\Scripts\activate
 python -m bhavcopy.download --from 2024-07-08 --to today --stocks --symbols NIFTY,BANKNIFTY,RELIANCE,TCS,HDFCBANK,INFY,ICICIBANK >> update_history.log 2>&1
 python -m bhavcopy.importer >> update_history.log 2>&1
+python -m daily_signals --source eod --notify >> update_history.log 2>&1
 ```
 
-Check `update_history.log` now and then for lines saying ERROR.
+Check `update_history.log` now and then for lines saying ERROR. The last line
+runs the daily signals on the newest session and sends the digest; see the
+next section.
+
+## Daily signals on the newest session
+
+After the update, evaluate every daily signal on the newest session in the
+archive:
+
+```
+python -m daily_signals --source eod
+```
+
+It prints a digest in three parts. **FIRED** lists the signals that fired,
+with direction and strength. **QUIET** lists the signals that had today's
+reading but found nothing extreme. **UNAVAILABLE** lists the signals with no
+reading to judge, and why. Every evaluation is also written to the evaluation
+log in `market_data.db`. A rerun keeps the first evaluation of a session.
+
+- `--date 2026-10-01` evaluates a past session instead of the newest.
+- `--symbols NIFTY,BANKNIFTY` limits the run.
+- `--verbose` adds what history each symbol had, which is the first thing to
+  read when a signal says UNAVAILABLE.
+- `--notify` sends the digest to Telegram, once per session. `--force` sends it
+  again.
+
+Every fire is labelled `[unvalidated]` until that signal passes the
+out-of-sample test. **These are hypotheses under test, not trade advice.**
+
+**`--source eod` versus the app.** The app runs the same signals by itself at
+16:05 IST on the recorder's own bars (`--source recorder`). The two sources
+cover different signals. `skew_rr25` needs an end-of-day bar, so it runs only
+on `eod`. `cas_dislocation` reads the closing auction off intraday bars, so it
+runs only on `recorder`. The term structure needs a traded expiry beyond 60
+days, which only the bhavcopy import supplies.
+
+### Telegram, once
+
+1. In Telegram, message **@BotFather**, send `/newbot`, and follow the prompts.
+   Copy the token it gives you.
+2. Send your new bot any message. Then open
+   `https://api.telegram.org/bot<TOKEN>/getUpdates` in a browser and copy the
+   number after `"chat":{"id":`.
+3. Store both for your Windows user, in cmd:
+
+   ```
+   setx TELEGRAM_BOT_TOKEN "123456:ABC-your-token"
+   setx TELEGRAM_CHAT_ID "123456789"
+   ```
+
+   `setx` applies to windows opened **afterwards**, so open a new cmd window
+   before the next step. The values stay on your machine and are never
+   committed.
+4. Test it with `python -m daily_signals --source eod --notify --force`.
+
+A digest that cannot be sent prints the reason, for example that no channel is
+configured. The session is not marked as sent, so the next run tries again.
 
 ## Checking the data
 

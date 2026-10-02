@@ -32,6 +32,22 @@ def signal_fired(signal_id: str, symbol: str, direction: str, strength: float,
     )
 
 
+def signal_digest(title: str, body: str, session_date: str, source: str,
+                  any_fired: bool) -> Notification:
+    """
+    The daily runner's one message per session (`daily_signals.format_digest`).
+
+    SIGNAL severity only when something fired, so a severity floor set to
+    SIGNAL keeps the fires and drops the quiet days; INFO otherwise.
+    """
+    return Notification(
+        title=title,
+        body=body,
+        severity=Severity.SIGNAL if any_fired else Severity.INFO,
+        dedupe_key=f"signal_digest:{source}:{session_date}",
+    )
+
+
 def trade_opened(trade: Trade) -> Notification:
     entry = trade.entry_cost()
     return Notification(

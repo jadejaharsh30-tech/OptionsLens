@@ -111,7 +111,9 @@ def skew_percentile(series: list[dict], current_rr: float,
 
 
 def load_skew_history(db_path: Optional[str], symbol: str,
-                      dates: Optional[list[str]] = None) -> list[dict]:
+                      dates: Optional[list[str]] = None,
+                      until: Optional[str] = None,
+                      max_prior_readings: Optional[int] = None) -> list[dict]:
     """
     Build the dated risk-reversal series for a symbol from recorded snapshots.
 
@@ -123,19 +125,45 @@ def load_skew_history(db_path: Optional[str], symbol: str,
     Pulls one bar per date through `last_snapshot_of_session` rather than
     walking each session: on a year of minute-level recorder data the walk is
     millions of rows loaded to keep 250 of them.
+
+    `until` + `max_prior_readings` serve a caller evaluating ONE date (the
+    daily runner). Every reading costs a chain-wide IV solve, and over the
+    full exchange archive that is minutes per symbol, for a signal that ranks
+    against its `lookback` most recent prior readings and nothing older. The
+    walk therefore goes backwards from `until` and stops once it holds that
+    many readings strictly before it, plus `until`'s own. Evaluated on `until`
+    with a lookback no larger than `max_prior_readings`, the signal sees
+    exactly what a full load would have given it.
     """
     from recorder.store import last_snapshot_of_session, recorded_dates
 
     kwargs = {"db_path": db_path} if db_path else {}
     days = sorted(dates) if dates is not None else recorded_dates(symbol, **kwargs)
+    if until is not None:
+        days = [d for d in days if d <= until]
 
-    def _closes() -> Iterable[ChainSnapshot]:
-        for d in days:
-            snap = last_snapshot_of_session(symbol, d, **kwargs)
-            if snap is not None:
-                yield snap
+    if max_prior_readings is None:
+        def _closes() -> Iterable[ChainSnapshot]:
+            for d in days:
+                snap = last_snapshot_of_session(symbol, d, **kwargs)
+                if snap is not None:
+                    yield snap
 
-    return build_skew_series(_closes())
+        return build_skew_series(_closes())
+
+    out: list[dict] = []
+    prior = 0
+    for d in reversed(days):
+        if prior >= max_prior_readings:
+            break
+        snap = last_snapshot_of_session(symbol, d, **kwargs)
+        rr = rr25_from_snapshot(snap) if snap is not None else None
+        if rr is None:
+            continue
+        out.append({"date": d, "rr_25d": round(rr, 4)})
+        if d != until:
+            prior += 1
+    return out[::-1]
 
 
 def summarise(series: list[dict]) -> dict:
