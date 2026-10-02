@@ -63,3 +63,10 @@ backend/market_data.db-shm
 *.db-journal
 *.db-wal
 *.db-shm
+
+# Python virtual environments (created per machine, never committed)
+.venv/
+venv/
+
+# Materialised EOD snapshots for backtesting (rebuilt from the archive)
+backend/eod_snapshots.db
