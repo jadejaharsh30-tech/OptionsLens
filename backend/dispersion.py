@@ -107,12 +107,27 @@ def choose_basket(index_dates: set[str], member_dates: dict[str, set[str]],
     Decided from the data once per series: a member missing from the archive
     entirely (ICICIBANK, where it was not downloaded) is excluded rather than
     blanking every date.
+
+    Coverage is measured from the date the LATEST-STARTING member's history
+    begins, not over the index's whole history. Measured over all of NIFTY
+    (options from 2001) every stock looked thin — 34-50% — because stock
+    options were American-style until 2011 and have no IV before then; all
+    but one member would have been dropped and the series left empty. The
+    trade-off: one member that starts much later shortens the window for the
+    whole basket, so such a member is better excluded explicitly.
     """
     if not index_dates:
         return (), {}
+    starts = [min(d) for d in member_dates.values() if d]
+    window_start = max(starts) if starts else None
+    window = ({d for d in index_dates if d >= window_start}
+              if window_start else set(index_dates))
+    if not window:
+        window = set(index_dates)
+
     basket, excluded = [], {}
     for sym in sorted(member_dates):
-        cov = len(member_dates[sym] & index_dates) / len(index_dates)
+        cov = len(member_dates[sym] & window) / len(window)
         if cov >= min_coverage:
             basket.append(sym)
         else:

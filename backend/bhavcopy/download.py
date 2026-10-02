@@ -257,13 +257,31 @@ def fetch(url: str, retries: int = 3, timeout: int = 90) -> bytes | None:
 
 
 def rows_from_zip(payload: bytes) -> list[dict[str, str]]:
+    return read_rows(payload)[0]
+
+
+def read_rows(payload: bytes) -> tuple[list[dict[str, str]], int]:
+    """
+    The file's rows as {header: value}, plus how many lines were unusable.
+
+    Some 2002-2003 files carry lines with MORE fields than the header. The csv
+    module files the surplus under a None key as a list, which used to crash
+    the whole day. Surplus fields that are all empty (stray trailing commas)
+    are dropped; a line with real surplus values cannot be aligned to its
+    columns, so it is skipped and counted rather than guessed at.
+    """
     with zipfile.ZipFile(io.BytesIO(payload)) as zf:
         with zf.open(zf.namelist()[0]) as fp:
             text = fp.read().decode("utf-8", errors="replace")
-    return [
-        {(k or "").strip(): (v or "").strip() for k, v in row.items()}
-        for row in csv.DictReader(io.StringIO(text))
-    ]
+    rows: list[dict[str, str]] = []
+    malformed = 0
+    for row in csv.DictReader(io.StringIO(text)):
+        extra = row.pop(None, None)
+        if extra and any((v or "").strip() for v in extra):
+            malformed += 1
+            continue
+        rows.append({(k or "").strip(): (v or "").strip() for k, v in row.items()})
+    return rows, malformed
 
 
 # ── parsing helpers ──────────────────────────────────────────────────────────
@@ -475,7 +493,7 @@ def ingest_day(conn: sqlite3.Connection, day: date, symbols: set[str] | None,
         return "no_file", 0, 0
 
     try:
-        raw = rows_from_zip(payload)
+        raw, malformed = read_rows(payload)
     except (zipfile.BadZipFile, IndexError) as exc:
         log(conn, day, era, url, "error", note=f"unreadable archive: {exc}")
         return "error", 0, 0
@@ -492,7 +510,8 @@ def ingest_day(conn: sqlite3.Connection, day: date, symbols: set[str] | None,
 
     n_opt = insert(conn, "daily_option", OPTION_COLS, options)
     n_fut = insert(conn, "daily_future", FUTURE_COLS, futures)
-    log(conn, day, era, url, "ok", len(raw), n_opt, n_fut)
+    log(conn, day, era, url, "ok", len(raw), n_opt, n_fut,
+        note=f"{malformed} malformed line(s) skipped" if malformed else "")
     conn.commit()
     return "ok", n_opt, n_fut
 

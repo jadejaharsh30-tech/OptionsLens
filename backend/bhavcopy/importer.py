@@ -71,6 +71,8 @@ class SymbolStats:
     # Dates before 2024-07-08, whose close was backed out of the front future
     # (bhavcopy/spot.py) because the file publishes no underlying price.
     dates_spot_estimated: int = 0
+    # Dates skipped because an earlier run already imported them (see --full).
+    dates_already: int = 0
     expiries_seen: int = 0
     expiries_solved: int = 0
     dates_with_cm30: int = 0
@@ -84,10 +86,18 @@ class SymbolStats:
 def import_history(source_db: str, target_db: str = DB_PATH,
                    symbols: Optional[set[str]] = None,
                    min_volume: float = DEFAULT_MIN_VOLUME,
-                   progress: bool = False) -> dict[str, SymbolStats]:
+                   progress: bool = False,
+                   full: bool = False) -> dict[str, SymbolStats]:
     """
-    Import every date for `symbols` (default: configured underlyings present in
-    the source) and return per-symbol statistics.
+    Import dates for `symbols` (default: configured underlyings present in the
+    source) and return per-symbol statistics.
+
+    Incremental by default: a date that already has archive-sourced IV rows for
+    a symbol is skipped. With 25 years in the archive, re-solving every date on
+    every run made the routine daily update take as long as the first import.
+    `full=True` redoes everything — needed only after a change to how IV is
+    computed, and even then INSERT OR IGNORE keeps existing rows, so a genuine
+    recomputation also needs those rows removed first.
     """
     src = _open_read_only(source_db)
     init_db(target_db)
@@ -97,7 +107,8 @@ def import_history(source_db: str, target_db: str = DB_PATH,
 
     stats: dict[str, SymbolStats] = {}
     for symbol in sorted(wanted):
-        stats[symbol] = _import_symbol(src, target_db, symbol, min_volume, progress)
+        stats[symbol] = _import_symbol(src, target_db, symbol, min_volume, progress,
+                                       skip=set() if full else _imported_dates(target_db, symbol))
 
     lot_rows = src.execute("""
         SELECT symbol, expiry_dt, CAST(lot_size AS INTEGER), MIN(trad_dt), MAX(trad_dt),
@@ -119,9 +130,22 @@ def import_history(source_db: str, target_db: str = DB_PATH,
     return stats
 
 
+def _imported_dates(target_db: str, symbol: str) -> set[str]:
+    """Dates that already carry IV rows from this importer for `symbol`."""
+    conn = sqlite3.connect(target_db)
+    try:
+        return {r[0] for r in conn.execute(
+            "SELECT DISTINCT snapshot_date FROM atm_iv_history "
+            "WHERE symbol = ? AND source = ?", (symbol, SOURCE))}
+    finally:
+        conn.close()
+
+
 def _import_symbol(src: sqlite3.Connection, target_db: str, symbol: str,
-                   min_volume: float, progress: bool) -> SymbolStats:
+                   min_volume: float, progress: bool,
+                   skip: Optional[set[str]] = None) -> SymbolStats:
     st = SymbolStats()
+    skip = skip or set()
     dates = [r[0] for r in src.execute(
         "SELECT DISTINCT trad_dt FROM daily_option WHERE symbol = ? ORDER BY trad_dt",
         (symbol,))]
@@ -131,6 +155,9 @@ def _import_symbol(src: sqlite3.Connection, target_db: str, symbol: str,
     est_rows: list[tuple[str, str, float]] = []
 
     for i, day in enumerate(dates):
+        if day in skip:
+            st.dates_already += 1
+            continue
         st.dates += 1
         st.first = st.first or day
         st.last = day
@@ -218,6 +245,10 @@ def _print_report(stats: dict[str, SymbolStats], min_volume: float) -> None:
     print("volume gate; far months often have no traded ATM strike, which is expected.")
     print("'CM30 days' is how many dates now have a 30-day reading for IV Rank.")
     print("IV rows and spot count only rows added by this run; re-runs add nothing.")
+    already = sum(st.dates_already for st in stats.values())
+    if already:
+        print(f"{already:,} symbol-dates were already imported and skipped "
+              f"('dates' counts only those processed now; --full redoes all).")
     print("'est spot' counts pre-2024-07-08 dates whose close was estimated from the")
     print("front-month future (tagged futures_estimate); IV does not depend on it.")
 
@@ -232,6 +263,8 @@ def main() -> int:
     ap.add_argument("--symbols", default=None,
                     help="comma-separated, or ALL; default is every configured underlying")
     ap.add_argument("--min-volume", type=float, default=DEFAULT_MIN_VOLUME)
+    ap.add_argument("--full", action="store_true",
+                    help="re-process every date, not just ones not yet imported")
     args = ap.parse_args()
 
     if not Path(args.source).is_file():
@@ -248,7 +281,8 @@ def main() -> int:
 
     print(f"source  {Path(args.source).resolve()}")
     print(f"target  {Path(args.target).resolve()}")
-    stats = import_history(args.source, args.target, symbols, args.min_volume, progress=True)
+    stats = import_history(args.source, args.target, symbols, args.min_volume,
+                           progress=True, full=args.full)
     if not stats:
         print("\nNo matching symbols in the source database.")
         return 1

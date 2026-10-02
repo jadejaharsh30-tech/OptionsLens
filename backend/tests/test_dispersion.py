@@ -234,3 +234,24 @@ def test_thin_history_skips():
     d = "2026-06-15"
     res = evaluate(d, series_ending(d, 0.9, n=10))
     assert not res.fired and "10 prior" in res.reason
+
+
+def test_coverage_is_measured_where_members_can_exist():
+    """
+    NIFTY has options from 2001; stock IV only exists from 2011 (American-style
+    before). Over the index's whole history every stock looked thin and was
+    dropped, emptying the series. Coverage is now measured from where the
+    members' history begins.
+    """
+    index_dates = {f"{y}-01-{d:02d}" for y in range(2001, 2027) for d in range(1, 21)}
+    # Like the real stocks: none before 2011, and gaps within their own years
+    # (an untraded second month leaves no 30-day reading): 14 of 20 days.
+    stock = {d for d in index_dates if d >= "2011" and int(d[-2:]) <= 14}
+    members = {"A": stock, "B": set(stock), "C": set()}
+
+    whole = len(stock) / len(index_dates)
+    assert whole < 0.5                     # what the old whole-history rule saw: 43%
+
+    basket, excluded = choose_basket(index_dates, members)
+    assert basket == ("A", "B")            # 70% within the window
+    assert excluded == {"C": 0.0}

@@ -337,3 +337,55 @@ def test_spot_history_gains_a_source_column_in_place():
         conn.close()
         assert len(get_spot_history(db, "NIFTY", 10)) == 2
     assert rows == {"2025-01-06": None, "2010-03-15": "futures_estimate"}
+
+
+def test_lines_with_surplus_fields_no_longer_crash_the_day(monkeypatch):
+    """
+    Real 2002-2003 files carry lines with more fields than the header; the csv
+    module files the surplus as a list under a None key, and every such day
+    failed with "'list' object has no attribute 'strip'". Empty surplus (stray
+    commas) is harmless; a line with real surplus values is skipped and counted.
+    """
+    payload = legacy_zip(D)
+    with zipfile.ZipFile(io.BytesIO(payload)) as zf:
+        name = zf.namelist()[0]
+        text = zf.read(name).decode()
+    lines = text.splitlines()
+    lines.insert(2, lines[1] + ",,")                       # stray trailing commas
+    lines.append("OPTIDX,NIFTY,08-Apr-2010,5000.00,CE,,,,1,,5,,1,0,15-MAR-2010,,EXTRA")
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w") as zf:
+        zf.writestr(name, "\n".join(lines) + "\n")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db = os.path.join(tmp, "a.db")
+        [(status, n_opt, n_fut)] = ingest(monkeypatch, db, {D: out.getvalue()}).values()
+        conn = sqlite3.connect(db)
+        note, = conn.execute("SELECT note FROM ingest_log").fetchone()
+        conn.close()
+    assert status == "ok"
+    assert n_opt == 18 and n_fut == 2       # the duplicated line is INSERT OR IGNORE'd
+    assert note == "1 malformed line(s) skipped"
+
+
+def test_a_second_import_processes_only_new_dates(monkeypatch):
+    """
+    With 25 years in the archive, re-solving every date on every routine
+    update made each update as slow as the first import.
+    """
+    from bhavcopy.importer import import_history
+
+    days = weekdays(D, 6)
+    with tempfile.TemporaryDirectory() as tmp:
+        src = os.path.join(tmp, "nse.db")
+        app = os.path.join(tmp, "app.db")
+        ingest(monkeypatch, src, {d: legacy_zip(d) for d in days[:5]})
+        first = import_history(src, app, symbols={"NIFTY"})["NIFTY"]
+        ingest(monkeypatch, src, {days[5]: legacy_zip(days[5])})
+        second = import_history(src, app, symbols={"NIFTY"})["NIFTY"]
+        full = import_history(src, app, symbols={"NIFTY"}, full=True)["NIFTY"]
+
+    assert (first.dates, first.dates_already) == (5, 0)
+    assert (second.dates, second.dates_already) == (1, 5)
+    assert second.iv_rows_added > 0
+    assert (full.dates, full.iv_rows_added) == (6, 0)   # redone, nothing duplicated

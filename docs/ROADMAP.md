@@ -322,6 +322,17 @@ or is pinned to it by a test.
 
 Append one line per session. Keep it terse.
 
+- **2026-10-02 (24)** — FULL ARCHIVE LANDED on the home laptop: 6,482 days,
+  18.3M option rows, 2001-06-04 to 2026-10-01; NIFTY 30-day IV on 5,638 of
+  6,253 dates (8.0%-89.9%). Three problems found in that output and fixed
+  before the out-of-sample run: (1) 12 days in 2002-03 crashed on CSV lines
+  with surplus fields — now dropped when empty, skipped and counted when
+  not; (2) the importer re-solved every date on every run — now incremental,
+  `--full` to redo; (3) `dispersion`'s basket rule measured stock coverage
+  over NIFTY's whole history, where stocks (no IV before 2011) all looked
+  thin — it would have emptied the series. The out-of-sample protocol is
+  pre-registered above. 542 tests pass.
+
 - **2026-10-02 (23)** — Home laptop set up as a second clone (Python 3.11
   venv, 533 passing); `.venv` added to `.gitignore`. Full 2000-to-today
   download running there. Intraday significance fixed with a session-shift
@@ -585,6 +596,38 @@ Append one line per session. Keep it terse.
 ---
 
 ## Open questions / decisions to revisit
+
+- **PRE-REGISTERED OUT-OF-SAMPLE TEST — written 2026-10-02, BEFORE any result.**
+  The three signals were examined on NIFTY sessions from 2024-07-08 onward.
+  Everything before that is unseen by them. The test, fixed now:
+  - **Data:** NIFTY, sessions up to and including 2024-07-05
+    (`python -m backtest.cli run --signal <id> --symbol NIFTY --to 2024-07-05`).
+  - **Signals:** `vrp.v1`, `term_structure.v1`, `dispersion.v1`, registered
+    default parameters, unchanged. `dispersion` can only start in 2011 (stock
+    IV), so its sample is shorter by construction.
+  - **Headline:** the 20d_vol horizon, circular-shift p, aggregate row.
+  - **Bar:** three signals are tested, so a signal SURVIVES only if p ≤ 0.017
+    (0.05 / 3) AND its edge has the same sign as in-sample (vrp +, term
+    structure −, dispersion +).
+  - **Stability, read only for a survivor:** the same run split at
+    2012-12-31 (`--to 2012-12-31`, then `--from 2013-01-01 --to 2024-07-05`).
+    A survivor whose two halves disagree in sign is recorded as fragile, not
+    as an edge.
+  - **Not allowed after seeing results:** changing parameters, horizons,
+    the bar, or the cut date. Anything learnt from this run is a hypothesis
+    for data not yet used (the live recorder, from now on).
+  - **Secondary, declared now so it cannot be added later as a rescue:**
+    BANKNIFTY over the same period, same rules — a different instrument the
+    signals have never seen.
+
+- **Stock IV extremes from the full import need a look before any stock
+  signal is trusted.** CM30 lo/hi: RELIANCE 1.4% / 119.0%, ICICIBANK 12.6% /
+  126.0%, HDFCBANK 12.7% / 118.4%. A 1.4% thirty-day IV on RELIANCE is not a
+  market reading; corporate-action dates (bonus issues, splits, the 2023 Jio
+  demerger) are the first suspects, since strikes, lots and the futures used
+  to estimate spot are all adjusted on those days. NIFTY's 8.0% / 89.9% is
+  plausible (89.9% is October 2008). Does not block the NIFTY test above;
+  does affect `dispersion`, which uses these stocks.
 
 - ~~THE VERDICT IS MISCALIBRATED FOR MULTI-SESSION HORIZONS~~ **FIXED
   2026-09-29 for daily and vol modes** (`backtest/significance.py`); the

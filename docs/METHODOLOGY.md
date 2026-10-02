@@ -293,7 +293,8 @@ Two things the data said that the design had assumed otherwise:
   would have counted one regime three times. No ensemble exists yet,
   deliberately.
 
-**The next test is out of sample.** The 2024-2026 period has now been
+**The next test is out of sample, and its decision rule was committed
+before it ran** (see the pre-registered protocol in `docs/ROADMAP.md`). The 2024-2026 period has now been
 examined, so the signals are not tuned on it. Pre-2024 history (NIFTY options
 from mid-2001, stock IV from 2011) has never been seen by these signals, and it is
 the test of them as they stand.
